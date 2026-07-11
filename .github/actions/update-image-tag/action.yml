@@ -1,0 +1,86 @@
+# Composite Action: Update Image Tag in GitOps
+# Actualiza el image tag en kustomization.yaml
+
+name: 'Update Image Tag'
+description: 'Update image tag in kustomization.yaml for GitOps'
+
+inputs:
+  service:
+    description: 'Service name'
+    required: true
+  image-tag:
+    description: 'New image tag'
+    required: true
+  environment:
+    description: 'Environment (production, staging, dev)'
+    required: true
+  kustomization-path:
+    description: 'Path to kustomization.yaml'
+    required: true
+  ecr-registry:
+    description: 'ECR registry URL'
+    required: false
+    default: '${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install yq
+      shell: bash
+      run: |
+        sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+        sudo chmod +x /usr/local/bin/yq
+
+    - name: Update kustomization.yaml
+      shell: bash
+      working-directory: ${{ inputs.kustomization-path }}
+      run: |
+        # Extract just the tag from the full image string
+        TAG=$(echo "${{ inputs.image-tag }}" | rev | cut -d':' -f1 | rev)
+
+        echo "Updating image tag to: $TAG"
+
+        # Check if kustomization.yaml exists
+        if [ ! -f kustomization.yaml ]; then
+          echo "Creating new kustomization.yaml"
+          cat > kustomization.yaml <<EOF
+        apiVersion: kustomize.config.k8s.io/v1beta1
+        kind: Kustomization
+
+        resources:
+          - ../../base
+
+        images:
+          - name: ${{ inputs.service }}
+            newName: ${{ inputs.ecr-registry }}/${{ inputs.service }}
+            newTag: $TAG
+
+        namespace: ${{ inputs.environment }}
+        EOF
+        else
+          # Update existing kustomization.yaml
+          yq eval ".images[0].newTag = \"$TAG\"" -i kustomization.yaml
+        fi
+
+        echo "Updated kustomization.yaml:"
+        cat kustomization.yaml
+
+    - name: Verify update
+      shell: bash
+      working-directory: ${{ inputs.kustomization-path }}
+      run: |
+        if ! grep -q "${{ inputs.image-tag }}" kustomization.yaml; then
+          echo "❌ Failed to update image tag"
+          exit 1
+        fi
+        echo "✅ Image tag updated successfully"
+
+    - name: Update summary
+      shell: bash
+      run: |
+        echo "### 📝 GitOps Updated" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Service:** ${{ inputs.service }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Image Tag:** ${{ inputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Path:** ${{ inputs.kustomization-path }}" >> $GITHUB_STEP_SUMMARY

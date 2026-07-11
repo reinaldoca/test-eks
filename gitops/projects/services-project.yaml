@@ -1,0 +1,140 @@
+# ArgoCD Project: Services
+# Proyecto para microservicios de negocio
+
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: services
+  namespace: argocd
+  labels:
+    project: services
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: Business microservices (service-a, service-b, etc.)
+
+  # Repositorios permitidos
+  sourceRepos:
+    - 'https://github.com/fintech-company/gitops'
+    - 'https://github.com/fintech-company/services'
+
+  # Clusters de destino
+  destinations:
+    - namespace: 'production'
+      server: https://kubernetes.default.svc
+    - namespace: 'staging'
+      server: https://kubernetes.default.svc
+    - namespace: 'dev'
+      server: https://kubernetes.default.svc
+
+  # Solo recursos de namespace (no cluster-wide)
+  clusterResourceWhitelist: []
+
+  # Namespace resource whitelist
+  namespaceResourceWhitelist:
+    # Deployments, Services, ConfigMaps, Secrets
+    - group: ''
+      kind: Service
+    - group: ''
+      kind: ConfigMap
+    - group: ''
+      kind: Secret
+    - group: 'apps'
+      kind: Deployment
+    - group: 'apps'
+      kind: StatefulSet
+
+    # Gateway API resources
+    - group: 'gateway.networking.k8s.io'
+      kind: HTTPRoute
+    - group: 'gateway.networking.k8s.io'
+      kind: GRPCRoute
+
+    # Autoscaling
+    - group: 'autoscaling'
+      kind: HorizontalPodAutoscaler
+    - group: 'policy'
+      kind: PodDisruptionBudget
+
+    # Monitoring
+    - group: 'monitoring.coreos.com'
+      kind: ServiceMonitor
+    - group: 'monitoring.coreos.com'
+      kind: PodMonitor
+
+    # OpenTelemetry
+    - group: 'opentelemetry.io'
+      kind: Instrumentation
+
+    # Network Policies
+    - group: 'networking.k8s.io'
+      kind: NetworkPolicy
+
+    # RBAC (solo en namespace)
+    - group: 'rbac.authorization.k8s.io'
+      kind: Role
+    - group: 'rbac.authorization.k8s.io'
+      kind: RoleBinding
+
+    # ServiceAccounts
+    - group: ''
+      kind: ServiceAccount
+
+  # Orphaned resources
+  orphanedResources:
+    warn: true
+
+  # Resource quotas y limits
+  quotas:
+    - resource:
+        requests.cpu: "100"
+        requests.memory: 200Gi
+        limits.cpu: "200"
+        limits.memory: 400Gi
+        persistentvolumeclaims: "50"
+
+  # Destination resource limits
+  # destinationServiceAccounts:
+  #   - namespace: production
+  #     defaultServiceAccount: default
+
+  # Roles del proyecto
+  roles:
+    # Developers pueden ver y sincronizar sus servicios
+    - name: developer
+      description: Developers can view and sync their services
+      policies:
+        - p, proj:services:developer, applications, get, services/*, allow
+        - p, proj:services:developer, applications, sync, services/*, allow
+      groups:
+        - development-team
+
+    # Service owners tienen full control de su servicio
+    - name: service-owner
+      description: Service owners have full control
+      policies:
+        - p, proj:services:service-owner, applications, *, services/*, allow
+      # Groups se asignan por servicio específico
+
+  # Sync windows
+  syncWindows:
+    # Freeze deployments fuera de horas laborales en producción
+    - kind: deny
+      schedule: '0 0-8,18-23 * * *'  # 00:00-08:00 y 18:00-23:00
+      duration: 1h
+      applications:
+        - '*-production'
+      namespaces:
+        - production
+      manualSync: true  # Permitir sync manual incluso durante freeze
+
+    # Permitir deployments en staging/dev 24/7
+    - kind: allow
+      schedule: '* * * * *'
+      duration: 24h
+      applications:
+        - '*'
+      namespaces:
+        - staging
+        - dev
+      manualSync: true

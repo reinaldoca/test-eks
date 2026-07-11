@@ -1,0 +1,102 @@
+# ArgoCD Application: AWS Gateway API Controller
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gateway-api-controller
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "8"
+  labels:
+    category: networking
+spec:
+  project: platform
+
+  source:
+    chart: aws-gateway-controller
+    repoURL: https://aws.github.io/aws-application-networking-k8s
+    targetRevision: 0.0.19
+    helm:
+      releaseName: gateway-api-controller
+      values: |
+        # AWS Gateway Controller configuration
+        controller:
+          replicas: 2
+
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+
+          # ServiceAccount for IRSA
+          serviceAccount:
+            create: true
+            annotations:
+              eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/fintech-eks-production-gateway-controller
+
+          # Logging
+          logLevel: info
+
+          # AWS region
+          region: us-east-1
+
+          # VPC ID
+          vpcId: vpc-XXXXXXXXX  # Reemplazar con VPC ID real
+
+        # Default load balancer configuration
+        defaultLoadBalancer:
+          scheme: internet-facing
+          ipAddressType: dualstack
+
+          # Security group IDs
+          securityGroups:
+            - sg-XXXXXXXXX  # Reemplazar con SG ID real
+
+          # Subnets (públicas para internet-facing)
+          subnets:
+            - subnet-XXXXXXXXX
+            - subnet-YYYYYYYYY
+            - subnet-ZZZZZZZZZ
+
+          # Tags
+          tags:
+            - key: Environment
+              value: production
+            - key: ManagedBy
+              value: gateway-api-controller
+
+        # Enable WAF
+        waf:
+          enabled: true
+
+        # Access logs
+        accessLogs:
+          enabled: true
+          bucket: alb-logs-production-ACCOUNT_ID
+          prefix: gateway-logs/
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gateway-system
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        maxDuration: 2m
+
+  info:
+    - name: 'Description'
+      value: 'AWS Gateway API Controller for Application Load Balancers'
+    - name: 'Documentation'
+      value: 'https://www.gateway-api-controller.eks.aws.dev/'

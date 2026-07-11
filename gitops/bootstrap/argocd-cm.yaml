@@ -1,0 +1,211 @@
+# ArgoCD ConfigMap
+# Configuración avanzada: OIDC, resource customizations, accounts
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-cm
+    app.kubernetes.io/part-of: argocd
+data:
+  # OIDC Integration con AWS Cognito
+  # NOTA: Reemplazar con valores reales de Cognito
+  oidc.config: |
+    name: AWS Cognito
+    issuer: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_XXXXXXXXX
+    clientID: $oidc.cognito.clientID
+    clientSecret: $oidc.cognito.clientSecret
+    requestedScopes:
+      - openid
+      - profile
+      - email
+      - groups
+    requestedIDTokenClaims:
+      groups:
+        essential: true
+
+  # URL base para ArgoCD
+  url: https://argocd.fintech.com
+
+  # Accounts adicionales (además de admin)
+  accounts.platform-engineer: apiKey, login
+  accounts.sre: apiKey, login
+  accounts.developer: login
+
+  # Configuración de dex (alternativa a OIDC si se usa)
+  # dex.config: |
+  #   connectors:
+  #     - type: github
+  #       id: github
+  #       name: GitHub
+  #       config:
+  #         clientID: $dex.github.clientId
+  #         clientSecret: $dex.github.clientSecret
+  #         orgs:
+  #           - name: fintech-company
+
+  # Resource customizations para health checks
+  resource.customizations: |
+    # Gateway API resources
+    gateway.networking.k8s.io/Gateway:
+      health.lua: |
+        hs = {}
+        hs.status = "Healthy"
+        hs.message = "Gateway is ready"
+
+        if obj.status ~= nil then
+          if obj.status.conditions ~= nil then
+            for _, cond in ipairs(obj.status.conditions) do
+              if cond.type == "Programmed" and cond.status == "False" then
+                hs.status = "Degraded"
+                hs.message = cond.message or "Gateway not programmed"
+                return hs
+              end
+              if cond.type == "Ready" and cond.status == "False" then
+                hs.status = "Degraded"
+                hs.message = cond.message or "Gateway not ready"
+                return hs
+              end
+            end
+          end
+        end
+
+        return hs
+
+    gateway.networking.k8s.io/HTTPRoute:
+      health.lua: |
+        hs = {}
+        hs.status = "Healthy"
+        hs.message = "HTTPRoute is accepted"
+
+        if obj.status ~= nil then
+          if obj.status.parents ~= nil then
+            for _, parent in ipairs(obj.status.parents) do
+              if parent.conditions ~= nil then
+                for _, cond in ipairs(parent.conditions) do
+                  if cond.type == "Accepted" and cond.status == "False" then
+                    hs.status = "Degraded"
+                    hs.message = cond.message or "HTTPRoute not accepted"
+                    return hs
+                  end
+                  if cond.type == "ResolvedRefs" and cond.status == "False" then
+                    hs.status = "Degraded"
+                    hs.message = cond.message or "HTTPRoute refs not resolved"
+                    return hs
+                  end
+                end
+              end
+            end
+          end
+        end
+
+        return hs
+
+    # OpenTelemetry Collector
+    opentelemetry.io/OpenTelemetryCollector:
+      health.lua: |
+        hs = {}
+        hs.status = "Progressing"
+        hs.message = "Waiting for collector to be ready"
+
+        if obj.status ~= nil then
+          if obj.status.conditions ~= nil then
+            for _, cond in ipairs(obj.status.conditions) do
+              if cond.type == "Ready" then
+                if cond.status == "True" then
+                  hs.status = "Healthy"
+                  hs.message = "Collector is ready"
+                else
+                  hs.status = "Degraded"
+                  hs.message = cond.message or "Collector not ready"
+                end
+                return hs
+              end
+            end
+          end
+        end
+
+        return hs
+
+    # Prometheus
+    monitoring.coreos.com/Prometheus:
+      health.lua: |
+        hs = {}
+        hs.status = "Progressing"
+        hs.message = "Waiting for Prometheus"
+
+        if obj.status ~= nil then
+          if obj.status.conditions ~= nil then
+            for _, cond in ipairs(obj.status.conditions) do
+              if cond.type == "Available" then
+                if cond.status == "True" then
+                  hs.status = "Healthy"
+                  hs.message = "Prometheus is available"
+                else
+                  hs.status = "Degraded"
+                  hs.message = cond.message or "Prometheus not available"
+                end
+                return hs
+              end
+            end
+          end
+        end
+
+        return hs
+
+  # Ignorar diferencias en algunos campos
+  resource.ignoreDifferences: |
+    # Ignorar replicas en HPA-managed deployments
+    all:
+      jsonPointers:
+        - /spec/replicas
+      jqPathExpressions:
+        - .spec.template.metadata.annotations."kubectl.kubernetes.io/restartedAt"
+
+  # Configuración de timeout
+  timeout.reconciliation: 180s
+  timeout.hard.reconciliation: 0
+
+  # Habilitar anonymous access (read-only)
+  users.anonymous.enabled: "false"
+
+  # Repositorios permitidos
+  repositories: |
+    - url: https://github.com/fintech-company/gitops
+      name: gitops-repo
+      type: git
+
+  # Application label key para tracking
+  application.instanceLabelKey: argocd.argoproj.io/instance
+
+  # Configuración de status badge
+  statusbadge.enabled: "true"
+
+  # Admin password (cambiar después del primer login)
+  # admin.password: <bcrypt-hash>
+  # admin.passwordMtime: "2024-01-01T00:00:00Z"
+
+  # Habilitar helm
+  helm.enabled: "true"
+  kustomize.enabled: "true"
+
+  # Configuración de kustomize
+  kustomize.buildOptions: --enable-helm --load-restrictor LoadRestrictionsNone
+
+  # GA tracking (opcional, deshabilitar en producción)
+  ga.trackingid: ""
+  ga.anonymizeusers: "true"
+---
+# Secret para OIDC credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: argocd-oidc-credentials
+  namespace: argocd
+type: Opaque
+stringData:
+  # NOTA: Estos valores deben venir de AWS Secrets Manager via External Secrets
+  oidc.cognito.clientID: "REPLACE_WITH_COGNITO_CLIENT_ID"
+  oidc.cognito.clientSecret: "REPLACE_WITH_COGNITO_CLIENT_SECRET"

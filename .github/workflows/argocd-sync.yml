@@ -1,0 +1,124 @@
+# GitHub Actions Workflow: ArgoCD Manual Sync
+# Fuerza sync manual de aplicaciones de ArgoCD
+
+name: ArgoCD Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      application:
+        description: 'ArgoCD Application to sync'
+        required: true
+        type: choice
+        options:
+          - all
+          - platform-apps
+          - service-a
+          - service-b
+          - opentelemetry-operator
+          - kube-prometheus-stack
+          - gateway-api-controller
+      prune:
+        description: 'Prune resources'
+        required: false
+        type: boolean
+        default: false
+      force:
+        description: 'Force sync (override hooks)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  argocd-sync:
+    name: Sync ArgoCD Application
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-eks
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name fintech-eks-production
+
+      - name: Install ArgoCD CLI
+        run: |
+          curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x argocd
+          sudo mv argocd /usr/local/bin/
+
+      - name: Get ArgoCD admin password
+        id: argocd-password
+        run: |
+          PASSWORD=$(kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath="{.data.password}" | base64 -d)
+          echo "::add-mask::$PASSWORD"
+          echo "password=$PASSWORD" >> $GITHUB_OUTPUT
+
+      - name: Port-forward ArgoCD server
+        run: |
+          kubectl port-forward svc/argocd-server -n argocd 8080:443 &
+          sleep 5
+
+      - name: Login to ArgoCD
+        run: |
+          argocd login localhost:8080 \
+            --username admin \
+            --password "${{ steps.argocd-password.outputs.password }}" \
+            --insecure
+
+      - name: Sync application(s)
+        run: |
+          SYNC_FLAGS=""
+          if [ "${{ inputs.prune }}" == "true" ]; then
+            SYNC_FLAGS="$SYNC_FLAGS --prune"
+          fi
+          if [ "${{ inputs.force }}" == "true" ]; then
+            SYNC_FLAGS="$SYNC_FLAGS --force"
+          fi
+
+          if [ "${{ inputs.application }}" == "all" ]; then
+            echo "Syncing all applications..."
+            argocd app sync -l app.kubernetes.io/part-of=fintech-platform $SYNC_FLAGS
+          else
+            echo "Syncing ${{ inputs.application }}..."
+            argocd app sync ${{ inputs.application }} $SYNC_FLAGS
+          fi
+
+      - name: Wait for sync
+        run: |
+          if [ "${{ inputs.application }}" == "all" ]; then
+            argocd app wait -l app.kubernetes.io/part-of=fintech-platform --timeout 600
+          else
+            argocd app wait ${{ inputs.application }} --timeout 600
+          fi
+
+      - name: Get application status
+        run: |
+          if [ "${{ inputs.application }}" == "all" ]; then
+            argocd app list
+          else
+            argocd app get ${{ inputs.application }}
+          fi
+
+      - name: Sync summary
+        run: |
+          echo "### ✅ ArgoCD Sync Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Application:** ${{ inputs.application }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Prune:** ${{ inputs.prune }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Force:** ${{ inputs.force }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check ArgoCD UI for detailed status: https://argocd.fintech.com" >> $GITHUB_STEP_SUMMARY

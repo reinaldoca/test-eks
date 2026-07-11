@@ -1,0 +1,183 @@
+# ArgoCD Installation via Helm
+# Este archivo se aplica UNA SOLA VEZ para bootstrap inicial
+# Después ArgoCD se autogestiona via App of Apps
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd
+  labels:
+    name: argocd
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argocd-installer
+  namespace: argocd
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: argocd-installer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: argocd-installer
+    namespace: argocd
+---
+# Job para instalar ArgoCD via Helm
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: argocd-helm-install
+  namespace: argocd
+spec:
+  template:
+    metadata:
+      labels:
+        app: argocd-installer
+    spec:
+      serviceAccountName: argocd-installer
+      restartPolicy: OnFailure
+      containers:
+        - name: helm-installer
+          image: alpine/helm:3.13.3
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "🚀 Installing ArgoCD via Helm..."
+
+              # Add ArgoCD Helm repo
+              helm repo add argo https://argoproj.github.io/argo-helm
+              helm repo update
+
+              # Install ArgoCD
+              helm upgrade --install argocd argo/argo-cd \
+                --namespace argocd \
+                --version 5.51.6 \
+                --create-namespace \
+                --wait \
+                --timeout 10m \
+                --values - <<EOF
+              global:
+                domain: argocd.fintech.com
+
+              # HA configuration
+              controller:
+                replicas: 2
+                resources:
+                  requests:
+                    cpu: 500m
+                    memory: 1Gi
+                  limits:
+                    cpu: 2000m
+                    memory: 4Gi
+
+              server:
+                replicas: 2
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 256Mi
+                  limits:
+                    cpu: 500m
+                    memory: 512Mi
+                # Habilitar ingress (via Gateway API después)
+                service:
+                  type: ClusterIP
+                # Configuración inicial
+                extraArgs:
+                  - --insecure  # TLS terminado en Gateway
+
+              repoServer:
+                replicas: 2
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 256Mi
+                  limits:
+                    cpu: 1000m
+                    memory: 1Gi
+
+              applicationSet:
+                replicas: 2
+
+              # Redis HA
+              redis-ha:
+                enabled: true
+                replicas: 3
+
+              # Configuración de recursos
+              configs:
+                params:
+                  server.insecure: true
+                  application.instanceLabelKey: argocd.argoproj.io/instance
+
+                cm:
+                  # Timeout para operaciones
+                  timeout.reconciliation: 180s
+
+                  # Configuración de recursos
+                  resource.customizations: |
+                    gateway.networking.k8s.io/Gateway:
+                      health.lua: |
+                        hs = {}
+                        hs.status = "Healthy"
+                        if obj.status ~= nil then
+                          for _, cond in ipairs(obj.status.conditions or {}) do
+                            if cond.type == "Ready" and cond.status == "False" then
+                              hs.status = "Degraded"
+                              hs.message = cond.message
+                              break
+                            end
+                          end
+                        end
+                        return hs
+
+                    gateway.networking.k8s.io/HTTPRoute:
+                      health.lua: |
+                        hs = {}
+                        hs.status = "Healthy"
+                        if obj.status ~= nil then
+                          for _, parent in ipairs(obj.status.parents or {}) do
+                            for _, cond in ipairs(parent.conditions or {}) do
+                              if cond.type == "Accepted" and cond.status == "False" then
+                                hs.status = "Degraded"
+                                hs.message = cond.message
+                                break
+                              end
+                            end
+                          end
+                        end
+                        return hs
+
+              # Notifications (Slack, PagerDuty, etc.)
+              notifications:
+                enabled: true
+
+              # ApplicationSet controller
+              applicationSet:
+                enabled: true
+              EOF
+
+              echo "✅ ArgoCD installed successfully"
+
+              # Get initial admin password
+              echo "🔑 ArgoCD admin password:"
+              kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath="{.data.password}" | base64 -d
+              echo ""
+              echo ""
+              echo "📝 Next steps:"
+              echo "1. Port-forward to access UI: kubectl port-forward svc/argocd-server -n argocd 8080:443"
+              echo "2. Login at https://localhost:8080 with admin and the password above"
+              echo "3. Apply argocd-cm.yaml for OIDC configuration"
+              echo "4. Apply argocd-rbac.yaml for role-based access"
+              echo "5. Apply app-of-apps.yaml to bootstrap platform"

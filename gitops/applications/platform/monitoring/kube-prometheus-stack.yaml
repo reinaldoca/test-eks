@@ -1,0 +1,221 @@
+# ArgoCD Application: Kube-Prometheus-Stack
+# Prometheus Operator, Grafana, Alertmanager
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    category: monitoring
+spec:
+  project: platform
+
+  source:
+    chart: kube-prometheus-stack
+    repoURL: https://prometheus-community.github.io/helm-charts
+    targetRevision: 55.5.0
+    helm:
+      releaseName: kube-prometheus-stack
+      values: |
+        # Prometheus configuration
+        prometheus:
+          prometheusSpec:
+            # HA configuration
+            replicas: 2
+
+            # Retention
+            retention: 30d
+            retentionSize: "45GB"
+
+            # Storage
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: gp3
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 100Gi
+
+            # Resources
+            resources:
+              requests:
+                cpu: 500m
+                memory: 2Gi
+              limits:
+                cpu: 2000m
+                memory: 8Gi
+
+            # Service discovery
+            serviceMonitorSelectorNilUsesHelmValues: false
+            podMonitorSelectorNilUsesHelmValues: false
+            ruleSelectorNilUsesHelmValues: false
+
+            # Labels para discovery
+            serviceMonitorSelector:
+              matchLabels:
+                app: fintech
+
+            # External labels para federation
+            externalLabels:
+              cluster: fintech-eks-production
+              environment: production
+
+            # Remote write (opcional: Thanos)
+            # remoteWrite:
+            #   - url: http://thanos-receive:19291/api/v1/receive
+
+            # Security context
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 1000
+              fsGroup: 2000
+
+        # Alertmanager configuration
+        alertmanager:
+          alertmanagerSpec:
+            replicas: 3
+
+            storage:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: gp3
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 10Gi
+
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+
+          # Configuración de alertmanager (Slack, PagerDuty)
+          config:
+            global:
+              resolve_timeout: 5m
+              slack_api_url: 'https://hooks.slack.com/services/REPLACE_WITH_WEBHOOK'
+
+            route:
+              group_by: ['alertname', 'cluster', 'service']
+              group_wait: 10s
+              group_interval: 10s
+              repeat_interval: 12h
+              receiver: 'default'
+
+              routes:
+                # Critical alerts go to PagerDuty
+                - match:
+                    severity: critical
+                  receiver: pagerduty-critical
+                  continue: true
+
+                # Warning alerts go to Slack
+                - match:
+                    severity: warning
+                  receiver: slack-warnings
+
+            receivers:
+              - name: 'default'
+                slack_configs:
+                  - channel: '#alerts'
+                    title: 'Alert: {{ .CommonAnnotations.summary }}'
+                    text: '{{ .CommonAnnotations.description }}'
+
+              - name: 'pagerduty-critical'
+                pagerduty_configs:
+                  - service_key: 'REPLACE_WITH_PAGERDUTY_KEY'
+
+              - name: 'slack-warnings'
+                slack_configs:
+                  - channel: '#alerts-warnings'
+
+        # Grafana (will be replaced by dedicated Grafana instance)
+        grafana:
+          enabled: false
+
+        # Prometheus Operator
+        prometheusOperator:
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+        # Node Exporter
+        nodeExporter:
+          enabled: true
+
+        # Kube State Metrics
+        kubeStateMetrics:
+          enabled: true
+
+        # Default rules
+        defaultRules:
+          create: true
+          rules:
+            alertmanager: true
+            etcd: true
+            configReloaders: true
+            general: true
+            k8s: true
+            kubeApiserver: true
+            kubeApiserverAvailability: true
+            kubeApiserverSlos: true
+            kubelet: true
+            kubeProxy: true
+            kubePrometheusGeneral: true
+            kubePrometheusNodeRecording: true
+            kubernetesApps: true
+            kubernetesResources: true
+            kubernetesStorage: true
+            kubernetesSystem: true
+            kubeScheduler: true
+            kubeStateMetrics: true
+            network: true
+            node: true
+            nodeExporterAlerting: true
+            nodeExporterRecording: true
+            prometheus: true
+            prometheusOperator: true
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        maxDuration: 3m
+
+  ignoreDifferences:
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      jsonPointers:
+        - /webhooks/0/clientConfig/caBundle
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jsonPointers:
+        - /webhooks/0/clientConfig/caBundle
+
+  info:
+    - name: 'Description'
+      value: 'Prometheus Operator, Alertmanager, and monitoring stack'
+    - name: 'Grafana Dashboards'
+      value: 'https://grafana.fintech.com'

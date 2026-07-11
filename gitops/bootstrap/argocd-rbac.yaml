@@ -1,0 +1,183 @@
+# ArgoCD RBAC Configuration
+# Define roles y permisos para platform-engineer, sre, developer
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-rbac-cm
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-rbac-cm
+    app.kubernetes.io/part-of: argocd
+data:
+  # RBAC Policy
+  policy.csv: |
+    # ============================================
+    # ROLE: platform-engineer (Full Access)
+    # ============================================
+    # Applications
+    p, role:platform-engineer, applications, *, */*, allow
+    p, role:platform-engineer, applications, create, */*, allow
+    p, role:platform-engineer, applications, update, */*, allow
+    p, role:platform-engineer, applications, delete, */*, allow
+    p, role:platform-engineer, applications, sync, */*, allow
+    p, role:platform-engineer, applications, override, */*, allow
+    p, role:platform-engineer, applications, action/*, */*, allow
+
+    # Projects
+    p, role:platform-engineer, projects, *, *, allow
+    p, role:platform-engineer, projects, create, *, allow
+    p, role:platform-engineer, projects, update, *, allow
+    p, role:platform-engineer, projects, delete, *, allow
+
+    # Repositories
+    p, role:platform-engineer, repositories, *, *, allow
+    p, role:platform-engineer, repositories, create, *, allow
+    p, role:platform-engineer, repositories, update, *, allow
+    p, role:platform-engineer, repositories, delete, *, allow
+
+    # Clusters
+    p, role:platform-engineer, clusters, *, *, allow
+
+    # Certificates
+    p, role:platform-engineer, certificates, *, *, allow
+
+    # Accounts
+    p, role:platform-engineer, accounts, *, *, allow
+
+    # GPG Keys
+    p, role:platform-engineer, gpgkeys, *, *, allow
+
+    # Logs
+    p, role:platform-engineer, logs, get, */*, allow
+
+    # Exec (para debugging)
+    p, role:platform-engineer, exec, create, */*, allow
+
+    # ============================================
+    # ROLE: sre (Sync and View Only)
+    # ============================================
+    # Applications - puede ver y sincronizar, NO modificar config
+    p, role:sre, applications, get, */*, allow
+    p, role:sre, applications, sync, */*, allow
+    p, role:sre, applications, action/*, */*, allow
+    p, role:sre, applications, override, */*, deny
+    p, role:sre, applications, update, */*, deny
+    p, role:sre, applications, delete, */*, deny
+
+    # Projects - solo lectura
+    p, role:sre, projects, get, *, allow
+
+    # Repositories - solo lectura
+    p, role:sre, repositories, get, *, allow
+
+    # Clusters - solo lectura
+    p, role:sre, clusters, get, *, allow
+
+    # Logs
+    p, role:sre, logs, get, */*, allow
+
+    # Exec para troubleshooting
+    p, role:sre, exec, create, */*, allow
+
+    # ============================================
+    # ROLE: developer (Own Services Only)
+    # ============================================
+    # Applications - solo sus propios servicios
+    p, role:developer, applications, get, services/service-*, allow
+    p, role:developer, applications, sync, services/service-*, allow
+    p, role:developer, applications, action/*, services/service-*, allow
+    p, role:developer, applications, override, services/service-*, deny
+    p, role:developer, applications, update, services/service-*, deny
+    p, role:developer, applications, delete, services/service-*, deny
+
+    # Logs de sus servicios
+    p, role:developer, logs, get, services/service-*, allow
+
+    # NO pueden ver platform applications
+    p, role:developer, applications, *, platform/*, deny
+
+    # ============================================
+    # ROLE: readonly (View Only Everything)
+    # ============================================
+    p, role:readonly, applications, get, */*, allow
+    p, role:readonly, projects, get, *, allow
+    p, role:readonly, repositories, get, *, allow
+    p, role:readonly, clusters, get, *, allow
+    p, role:readonly, logs, get, */*, allow
+
+    # ============================================
+    # GROUP MAPPINGS (via OIDC claims)
+    # ============================================
+    # Mapear grupos de OIDC a roles de ArgoCD
+    g, platform-engineering-team, role:platform-engineer
+    g, sre-team, role:sre
+    g, development-team, role:developer
+
+    # Usuarios específicos (fallback)
+    # g, alice@fintech.com, role:platform-engineer
+    # g, bob@fintech.com, role:sre
+    # g, charlie@fintech.com, role:developer
+
+  # Default policy para usuarios autenticados pero sin rol
+  policy.default: role:readonly
+
+  # Scopes para OIDC (mapear claims a roles)
+  scopes: '[groups, email]'
+---
+# ArgoCD RBAC para Kubernetes ServiceAccounts
+# Permite que pods en el cluster puedan interactuar con ArgoCD API
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-rbac-sa-cm
+  namespace: argocd
+data:
+  # ServiceAccount permissions
+  # Ejemplo: permitir que CI/CD ServiceAccount pueda sincronizar apps
+  policy.csv: |
+    # CI/CD ServiceAccount puede sync applications
+    p, system:serviceaccount:argocd:argocd-ci-cd, applications, sync, */*, allow
+    p, system:serviceaccount:argocd:argocd-ci-cd, applications, get, */*, allow
+
+    # Application controller (internal)
+    p, role:application-controller, *, *, */*, allow
+---
+# ServiceAccount para CI/CD
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argocd-ci-cd
+  namespace: argocd
+---
+# ClusterRole para CI/CD ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: argocd-ci-cd
+rules:
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - applications
+      - applicationsets
+    verbs:
+      - get
+      - list
+      - watch
+      - update
+      - patch
+---
+# ClusterRoleBinding para CI/CD ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: argocd-ci-cd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: argocd-ci-cd
+subjects:
+  - kind: ServiceAccount
+    name: argocd-ci-cd
+    namespace: argocd

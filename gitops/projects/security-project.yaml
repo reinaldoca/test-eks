@@ -1,0 +1,83 @@
+# ArgoCD Project: Security
+# Proyecto para herramientas de seguridad y compliance
+
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: security
+  namespace: argocd
+  labels:
+    project: security
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: Security and compliance tools (external-secrets, cert-manager, falco, gatekeeper)
+
+  # Repositorios permitidos
+  sourceRepos:
+    - 'https://github.com/fintech-company/gitops'
+    - 'https://charts.external-secrets.io'
+    - 'https://charts.jetstack.io'
+    - 'https://falcosecurity.github.io/charts'
+    - 'https://open-policy-agent.github.io/gatekeeper/charts'
+
+  # Clusters de destino
+  destinations:
+    - namespace: 'external-secrets'
+      server: https://kubernetes.default.svc
+    - namespace: 'cert-manager'
+      server: https://kubernetes.default.svc
+    - namespace: 'falco'
+      server: https://kubernetes.default.svc
+    - namespace: 'gatekeeper-system'
+      server: https://kubernetes.default.svc
+    - namespace: 'kube-system'
+      server: https://kubernetes.default.svc
+
+  # Security tools necesitan cluster resources
+  clusterResourceWhitelist:
+    - group: '*'
+      kind: '*'
+
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'
+
+  # Orphaned resources
+  orphanedResources:
+    warn: true
+
+  # Roles del proyecto
+  roles:
+    # Security engineers tienen full access
+    - name: security-admin
+      description: Security administrators
+      policies:
+        - p, proj:security:security-admin, applications, *, security/*, allow
+      groups:
+        - security-team
+        - platform-engineering-team
+
+    # SREs pueden ver y sincronizar
+    - name: security-operator
+      description: Security operators
+      policies:
+        - p, proj:security:security-operator, applications, get, security/*, allow
+        - p, proj:security:security-operator, applications, sync, security/*, allow
+      groups:
+        - sre-team
+
+  # Sync windows - security tools 24/7
+  syncWindows:
+    - kind: allow
+      schedule: '* * * * *'
+      duration: 24h
+      applications:
+        - '*'
+      manualSync: true
+
+  # NO permitir sync automático para security tools (require manual approval)
+  # syncPolicy:
+  #   automated:
+  #     prune: false
+  #     selfHeal: false

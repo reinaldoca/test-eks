@@ -1,0 +1,61 @@
+# Composite Action: Setup Terragrunt
+# Instala Terraform y Terragrunt con versiones específicas
+
+name: 'Setup Terragrunt'
+description: 'Install Terraform and Terragrunt with specified versions'
+
+inputs:
+  terraform-version:
+    description: 'Terraform version to install'
+    required: false
+    default: '1.6.6'
+  terragrunt-version:
+    description: 'Terragrunt version to install'
+    required: false
+    default: '0.54.0'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ inputs.terraform-version }}
+        terraform_wrapper: false
+
+    - name: Cache Terragrunt
+      id: cache-terragrunt
+      uses: actions/cache@v4
+      with:
+        path: ~/bin/terragrunt
+        key: terragrunt-${{ inputs.terragrunt-version }}
+
+    - name: Install Terragrunt
+      if: steps.cache-terragrunt.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        mkdir -p ~/bin
+        curl -Lo ~/bin/terragrunt \
+          https://github.com/gruntwork-io/terragrunt/releases/download/v${{ inputs.terragrunt-version }}/terragrunt_linux_amd64
+        chmod +x ~/bin/terragrunt
+        echo "$HOME/bin" >> $GITHUB_PATH
+
+    - name: Add Terragrunt to PATH
+      if: steps.cache-terragrunt.outputs.cache-hit == 'true'
+      shell: bash
+      run: |
+        echo "$HOME/bin" >> $GITHUB_PATH
+
+    - name: Verify installations
+      shell: bash
+      run: |
+        terraform version
+        terragrunt --version
+
+    - name: Print versions
+      shell: bash
+      run: |
+        echo "### 🔧 Tools Installed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Terraform:** $(terraform version | head -n1)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Terragrunt:** $(terragrunt --version | head -n1)" >> $GITHUB_STEP_SUMMARY

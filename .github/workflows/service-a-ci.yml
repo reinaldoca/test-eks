@@ -1,0 +1,265 @@
+# GitHub Actions Workflow: Service A CI/CD
+# Build, test, push Docker image, and update GitOps repository
+
+name: Service A CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'services/service-a/**'
+      - '.github/workflows/service-a-ci.yml'
+      - '.github/actions/build-and-push/**'
+
+  pull_request:
+    paths:
+      - 'services/service-a/**'
+      - '.github/workflows/service-a-ci.yml'
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  packages: write
+
+env:
+  SERVICE_NAME: service-a
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: service-a
+
+jobs:
+  test:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: services/service-a/package-lock.json
+
+      - name: Install dependencies
+        working-directory: services/service-a
+        run: npm ci
+
+      - name: Run linter
+        working-directory: services/service-a
+        run: npm run lint
+
+      - name: Run type check
+        working-directory: services/service-a
+        run: npm run typecheck
+
+      - name: Run tests
+        working-directory: services/service-a
+        run: npm run test:coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: services/service-a/coverage/lcov.info
+          flags: service-a
+          name: service-a-coverage
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Test summary
+        run: |
+          echo "### ✅ Tests Passed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:** ${{ env.SERVICE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Node Version:** 20" >> $GITHUB_STEP_SUMMARY
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner (filesystem)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: 'services/service-a'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy-fs'
+
+  build-and-push:
+    name: Build & Push Docker Image
+    needs: [test, security-scan]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-ecr
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-ECR
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-,format=short
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: services/service-a
+          file: services/service-a/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: Run Trivy scanner on Docker image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-image-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy image results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-image-results.sarif'
+          category: 'trivy-image'
+
+      - name: Build summary
+        run: |
+          echo "### 🐳 Docker Image Built & Pushed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:** ${{ env.SERVICE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry:** ${{ steps.login-ecr.outputs.registry }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** ${{ env.ECR_REPOSITORY }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags:** ${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest:** ${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+
+  update-gitops:
+    name: Update GitOps Repository
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update image tag in GitOps
+        uses: ./.github/actions/update-image-tag
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          image-tag: ${{ needs.build-and-push.outputs.image-tag }}
+          environment: production
+          kustomization-path: gitops/applications/services/service-a/overlays/production
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "No changes to commit"
+          else
+            git add gitops/applications/services/service-a/overlays/production/kustomization.yaml
+            git commit -m "chore: update ${{ env.SERVICE_NAME }} image to ${{ needs.build-and-push.outputs.image-tag }}"
+            git push
+          fi
+
+      - name: Create deployment annotation
+        run: |
+          echo "### 🚀 Deployment Triggered" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:** ${{ env.SERVICE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image Tag:** ${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** production" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ArgoCD will automatically sync the new image to the cluster." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Monitor deployment:**" >> $GITHUB_STEP_SUMMARY
+          echo "- ArgoCD UI: https://argocd.fintech.com" >> $GITHUB_STEP_SUMMARY
+          echo "- Grafana: https://grafana.fintech.com" >> $GITHUB_STEP_SUMMARY
+
+  notify:
+    name: Notify Deployment
+    needs: update-gitops
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send Slack notification
+        if: always()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "Service A Deployment ${{ needs.update-gitops.result }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Service A* deployment ${{ needs.update-gitops.result == 'success' && '✅ succeeded' || '❌ failed' }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Commit:*\n${{ github.sha }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Actor:*\n${{ github.actor }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

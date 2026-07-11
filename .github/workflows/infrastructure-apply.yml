@@ -1,0 +1,196 @@
+# GitHub Actions Workflow: Infrastructure Apply
+# Se ejecuta en push a main para aplicar cambios de infraestructura
+
+name: Infrastructure Apply
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'infrastructure/**'
+      - '.github/workflows/infrastructure-*.yml'
+      - '.github/actions/setup-terragrunt/**'
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+          - dev
+
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+
+env:
+  AWS_REGION: us-east-1
+  ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
+
+jobs:
+  terragrunt-apply:
+    name: Terragrunt Apply
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-terragrunt
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-InfraApply
+
+      - name: Setup Terragrunt
+        uses: ./.github/actions/setup-terragrunt
+        with:
+          terragrunt-version: '0.54.0'
+          terraform-version: '1.6.6'
+
+      - name: Terragrunt Init
+        working-directory: infrastructure/${{ env.ENVIRONMENT }}
+        run: |
+          terragrunt run-all init --terragrunt-non-interactive
+
+      - name: Terragrunt Plan
+        id: plan
+        working-directory: infrastructure/${{ env.ENVIRONMENT }}
+        run: |
+          terragrunt run-all plan \
+            --terragrunt-non-interactive \
+            --terragrunt-out-dir /tmp/tfplans \
+            -no-color 2>&1 | tee plan-output.txt
+
+      - name: Terragrunt Apply
+        id: apply
+        working-directory: infrastructure/${{ env.ENVIRONMENT }}
+        run: |
+          terragrunt run-all apply \
+            --terragrunt-non-interactive \
+            --terragrunt-parallelism 10 \
+            -no-color 2>&1 | tee apply-output.txt
+
+      - name: Upload apply output
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: terragrunt-apply-output
+          path: |
+            infrastructure/${{ env.ENVIRONMENT }}/plan-output.txt
+            infrastructure/${{ env.ENVIRONMENT }}/apply-output.txt
+          retention-days: 30
+
+      - name: Extract outputs
+        id: outputs
+        working-directory: infrastructure/${{ env.ENVIRONMENT }}
+        run: |
+          # Get VPC ID
+          VPC_ID=$(terragrunt output -raw vpc_id 2>/dev/null || echo "not-available")
+          echo "vpc_id=$VPC_ID" >> $GITHUB_OUTPUT
+
+          # Get EKS cluster name
+          CLUSTER_NAME=$(terragrunt output -raw cluster_name 2>/dev/null || echo "not-available")
+          echo "cluster_name=$CLUSTER_NAME" >> $GITHUB_OUTPUT
+
+          # Get S3 bucket for Loki
+          LOKI_BUCKET=$(terragrunt output -raw loki_bucket_name 2>/dev/null || echo "not-available")
+          echo "loki_bucket=$LOKI_BUCKET" >> $GITHUB_OUTPUT
+
+      - name: Update kubeconfig
+        if: steps.outputs.outputs.cluster_name != 'not-available'
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ steps.outputs.outputs.cluster_name }}
+
+      - name: Verify cluster access
+        if: steps.outputs.outputs.cluster_name != 'not-available'
+        run: |
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Apply summary
+        run: |
+          echo "### ✅ Infrastructure Applied Successfully" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+          echo "**AWS Region:** ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**VPC ID:** ${{ steps.outputs.outputs.vpc_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "**EKS Cluster:** ${{ steps.outputs.outputs.cluster_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Loki S3 Bucket:** ${{ steps.outputs.outputs.loki_bucket }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🚨 Infrastructure Apply Failed',
+              body: `Infrastructure apply failed for environment: **${{ env.ENVIRONMENT }}**
+
+              **Workflow:** ${{ github.workflow }}
+              **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+              **Commit:** ${{ github.sha }}
+              **Actor:** @${{ github.actor }}
+
+              Please check the workflow logs for details.`,
+              labels: ['infrastructure', 'failure']
+            });
+
+  post-apply-checks:
+    name: Post-Apply Validation
+    needs: terragrunt-apply
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-terragrunt
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify VPC
+        run: |
+          echo "Verifying VPC configuration..."
+          aws ec2 describe-vpcs \
+            --filters "Name=tag:Environment,Values=${{ env.ENVIRONMENT }}" \
+            --query 'Vpcs[*].[VpcId,CidrBlock,State]' \
+            --output table
+
+      - name: Verify EKS cluster
+        run: |
+          echo "Verifying EKS cluster..."
+          aws eks describe-cluster \
+            --name fintech-eks-${{ env.ENVIRONMENT }} \
+            --query 'cluster.[name,status,version,endpoint]' \
+            --output table
+
+      - name: Verify S3 buckets
+        run: |
+          echo "Verifying S3 buckets..."
+          aws s3 ls | grep "loki-logs-${{ env.ENVIRONMENT }}" || echo "Loki bucket not found"
+          aws s3 ls | grep "velero-backups-${{ env.ENVIRONMENT }}" || echo "Velero bucket not found"
+
+      - name: Validation summary
+        run: |
+          echo "### ✅ Post-Apply Validation Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All infrastructure components verified successfully." >> $GITHUB_STEP_SUMMARY

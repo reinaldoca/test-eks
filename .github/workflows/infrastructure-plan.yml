@@ -1,0 +1,165 @@
+# GitHub Actions Workflow: Infrastructure Plan
+# Se ejecuta en PRs para mostrar los cambios de infraestructura antes de aplicar
+
+name: Infrastructure Plan
+
+on:
+  pull_request:
+    paths:
+      - 'infrastructure/**'
+      - '.github/workflows/infrastructure-*.yml'
+      - '.github/actions/setup-terragrunt/**'
+    branches:
+      - main
+      - develop
+
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read
+  pull-requests: write  # Para comentar en el PR
+
+env:
+  AWS_REGION: us-east-1
+  ENVIRONMENT: production
+
+jobs:
+  terragrunt-plan:
+    name: Terragrunt Plan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-terragrunt
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-InfraPlan
+
+      - name: Setup Terragrunt
+        uses: ./.github/actions/setup-terragrunt
+        with:
+          terragrunt-version: '0.54.0'
+          terraform-version: '1.6.6'
+
+      - name: Terragrunt Init
+        working-directory: infrastructure/${{ env.ENVIRONMENT }}
+        run: |
+          terragrunt run-all init --terragrunt-non-interactive
+
+      - name: Terragrunt Validate
+        working-directory: infrastructure/${{ env.ENVIRONMENT }}
+        run: |
+          terragrunt run-all validate --terragrunt-non-interactive
+
+      - name: Terragrunt Plan
+        id: plan
+        working-directory: infrastructure/${{ env.ENVIRONMENT }}
+        continue-on-error: true
+        run: |
+          terragrunt run-all plan \
+            --terragrunt-non-interactive \
+            --terragrunt-out-dir /tmp/tfplans \
+            -no-color 2>&1 | tee plan-output.txt
+
+          # Capture exit code
+          echo "exitcode=$?" >> $GITHUB_OUTPUT
+
+      - name: Upload plan output
+        uses: actions/upload-artifact@v4
+        with:
+          name: terragrunt-plan-output
+          path: infrastructure/${{ env.ENVIRONMENT }}/plan-output.txt
+          retention-days: 7
+
+      - name: Comment PR with plan
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        env:
+          PLAN: "${{ steps.plan.outputs.stdout }}"
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const planOutput = fs.readFileSync('infrastructure/${{ env.ENVIRONMENT }}/plan-output.txt', 'utf8');
+
+            // Truncate if too long (GitHub comment limit is 65536 characters)
+            const maxLength = 60000;
+            const truncatedPlan = planOutput.length > maxLength
+              ? planOutput.substring(0, maxLength) + '\n\n... (truncated)'
+              : planOutput;
+
+            const output = `### 📋 Terragrunt Plan Results
+
+            <details>
+            <summary>Show Plan Output</summary>
+
+            \`\`\`terraform
+            ${truncatedPlan}
+            \`\`\`
+
+            </details>
+
+            **Environment:** \`${{ env.ENVIRONMENT }}\`
+            **Triggered by:** @${{ github.actor }}
+            **Status:** ${{ steps.plan.outcome }}
+
+            ---
+            *Plan generated on: ${new Date().toISOString()}*
+            `;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+
+      - name: Check plan status
+        if: steps.plan.outcome == 'failure'
+        run: |
+          echo "❌ Terragrunt plan failed"
+          exit 1
+
+      - name: Plan summary
+        run: |
+          echo "### ✅ Terragrunt Plan Successful" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+          echo "**AWS Region:** ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Plan output has been uploaded as an artifact and commented on the PR." >> $GITHUB_STEP_SUMMARY
+
+  security-scan:
+    name: Security Scan (Checkov)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: infrastructure/
+          framework: terraform
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+          soft_fail: false
+          quiet: false
+
+      - name: Upload Checkov results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov-results.sarif
+          category: checkov
+
+      - name: Checkov summary
+        if: always()
+        run: |
+          echo "### 🛡️ Security Scan Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Checkov scan results have been uploaded to Security tab." >> $GITHUB_STEP_SUMMARY

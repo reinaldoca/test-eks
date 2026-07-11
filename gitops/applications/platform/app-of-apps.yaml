@@ -1,0 +1,56 @@
+# App of Apps - Platform
+# Esta Application raíz despliega todas las aplicaciones de plataforma
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-apps
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: platform
+
+  source:
+    repoURL: https://github.com/fintech-company/gitops
+    targetRevision: HEAD
+    path: gitops/applications/platform
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=false
+
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # Health assessment
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+
+  # Información adicional
+  info:
+    - name: 'Description'
+      value: 'Platform components - observability, monitoring, networking, security'
+    - name: 'Owner'
+      value: 'platform-engineering-team@fintech.com'
+    - name: 'Documentation'
+      value: 'https://docs.fintech.com/platform'

@@ -1,0 +1,125 @@
+# Gateway Resource
+# Este es el Gateway principal para todos los servicios
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+  labels:
+    name: production
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: aws-lb-gateway-class
+  annotations:
+    argocd.argoproj.io/sync-wave: "15"
+spec:
+  controllerName: gateway.aws/gateway-controller
+  description: AWS Application Load Balancer Gateway Class
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: fintech-gateway
+  namespace: production
+  annotations:
+    argocd.argoproj.io/sync-wave: "16"
+    # AWS-specific annotations
+    alb.gateway.aws/scheme: internet-facing
+    alb.gateway.aws/target-type: ip
+    alb.gateway.aws/healthcheck-protocol: HTTP
+    alb.gateway.aws/healthcheck-path: /health
+    alb.gateway.aws/healthcheck-interval-seconds: "30"
+    alb.gateway.aws/healthcheck-timeout-seconds: "5"
+    alb.gateway.aws/healthy-threshold-count: "2"
+    alb.gateway.aws/unhealthy-threshold-count: "2"
+    alb.gateway.aws/subnets: subnet-XXXXXXXXX,subnet-YYYYYYYYY,subnet-ZZZZZZZZZ
+    alb.gateway.aws/security-groups: sg-XXXXXXXXX
+    alb.gateway.aws/wafv2-acl-arn: arn:aws:wafv2:us-east-1:ACCOUNT_ID:webacl/fintech-waf
+    alb.gateway.aws/certificate-arn: arn:aws:acm:us-east-1:ACCOUNT_ID:certificate/XXXXXXXX
+    alb.gateway.aws/ssl-policy: ELBSecurityPolicy-TLS-1-2-2021-06
+    alb.gateway.aws/tags: Environment=production,ManagedBy=gateway-api
+  labels:
+    environment: production
+spec:
+  gatewayClassName: aws-lb-gateway-class
+
+  listeners:
+    # HTTP listener (redirect to HTTPS)
+    - name: http
+      protocol: HTTP
+      port: 80
+      hostname: "*.fintech.com"
+      allowedRoutes:
+        namespaces:
+          from: All
+      # Nota: Redirección a HTTPS se configura en HTTPRoute
+
+    # HTTPS listener
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: "*.fintech.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: fintech-tls-cert
+            namespace: production
+      allowedRoutes:
+        namespaces:
+          from: All
+
+    # Listener para métricas (interno)
+    - name: metrics-internal
+      protocol: HTTP
+      port: 9090
+      hostname: "metrics.internal.fintech.com"
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+# HTTPRoute para redirect HTTP -> HTTPS
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: http-to-https-redirect
+  namespace: production
+  annotations:
+    argocd.argoproj.io/sync-wave: "17"
+spec:
+  parentRefs:
+    - name: fintech-gateway
+      namespace: production
+      sectionName: http
+
+  hostnames:
+    - "*.fintech.com"
+
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
+---
+# ReferenceGrant para permitir cross-namespace routing
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: gateway-to-services
+  namespace: production
+  annotations:
+    argocd.argoproj.io/sync-wave: "16"
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: production
+  to:
+    - group: ""
+      kind: Service
