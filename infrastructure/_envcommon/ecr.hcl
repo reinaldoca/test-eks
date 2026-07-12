@@ -2,7 +2,7 @@
 # Repositorios de Docker para microservicios
 
 terraform {
-  source = "terraform-aws-modules/ecr/aws//."
+  source = "tfr://registry.terraform.io/terraform-aws-modules/ecr/aws?version=2.3.0"
 }
 
 locals {

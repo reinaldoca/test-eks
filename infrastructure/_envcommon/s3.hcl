@@ -2,7 +2,7 @@
 # Bucket para Loki logs con lifecycle policies y seguridad
 
 terraform {
-  source = "terraform-aws-modules/s3-bucket/aws//."
+  source = "tfr://registry.terraform.io/terraform-aws-modules/s3-bucket/aws?version=4.2.2"
 }
 
 locals {

@@ -2,7 +2,7 @@
 # Módulo reutilizable para VPC en todos los entornos
 
 terraform {
-  source = "terraform-aws-modules/vpc/aws//."
+  source = "tfr://registry.terraform.io/terraform-aws-modules/vpc/aws?version=5.13.0"
 }
 
 locals {

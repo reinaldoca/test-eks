@@ -2,7 +2,7 @@
 # Módulo reutilizable para EKS Auto Mode en todos los entornos
 
 terraform {
-  source = "terraform-aws-modules/eks/aws//."
+  source = "tfr://registry.terraform.io/terraform-aws-modules/eks/aws?version=20.31.0"
 }
 
 locals {
