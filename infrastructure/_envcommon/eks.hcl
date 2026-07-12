@@ -90,9 +90,10 @@ inputs = {
   cluster_name    = local.cluster_name
   cluster_version = local.cluster_version
 
-  # VPC y subredes (pasados como inputs desde child terragrunt.hcl)
-  vpc_id     = try(local.vpc_id, null)
-  subnet_ids = try(local.subnet_ids, null)
+  # VPC y subredes (estas variables vienen de inputs en el child terragrunt.hcl)
+  # Los valores se pasarán al módulo Terraform como variables de entrada
+  vpc_id     = null  # Se sobreescribirá con inputs
+  subnet_ids = null  # Se sobreescribirá con inputs
 
   # Control plane
   cluster_endpoint_public_access  = true
@@ -149,7 +150,7 @@ inputs = {
       from_port   = 443
       to_port     = 443
       type        = "ingress"
-      cidr_blocks = [try(local.vpc_cidr_block, "10.0.0.0/16")]
+      cidr_blocks = ["10.0.0.0/16"]  # Se sobreescribirá con inputs si se proporciona
     }
   }
 

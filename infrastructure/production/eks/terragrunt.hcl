@@ -23,16 +23,13 @@ dependency "vpc" {
   }
 }
 
-# Locals que el archivo común usará
-locals {
-  # VPC outputs desde dependency
+# Inputs específicos de producción
+inputs = {
+  # VPC outputs desde dependency (se pasan al módulo Terraform como variables)
   vpc_id         = dependency.vpc.outputs.vpc_id
   subnet_ids     = dependency.vpc.outputs.private_subnets
   vpc_cidr_block = dependency.vpc.outputs.vpc_cidr_block
-}
 
-# Inputs específicos de producción
-inputs = {
   # Overrides para producción (si son necesarios)
   # Por ejemplo, aumentar min_size de node groups
 }

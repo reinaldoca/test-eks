@@ -24,16 +24,13 @@ dependency "vpc" {
   }
 }
 
-# Locals que el archivo común usará
-locals {
-  # VPC outputs desde dependency
+# Inputs específicos de dev
+inputs = {
+  # VPC outputs desde dependency (se pasan al módulo Terraform como variables)
   vpc_id         = dependency.vpc.outputs.vpc_id
   subnet_ids     = dependency.vpc.outputs.private_subnets
   vpc_cidr_block = dependency.vpc.outputs.vpc_cidr_block
-}
 
-# Inputs específicos de dev (reducir costos)
-inputs = {
   # Dev: cluster más pequeño y económico
   cluster_version = "1.30"
 
