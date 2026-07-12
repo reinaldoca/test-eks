@@ -142,45 +142,9 @@ inputs = {
     target_prefix = "loki-bucket-logs/"
   }
 
-  # Replicación cross-region para DR
-  replication_configuration = local.environment == "production" ? {
-    role = "arn:aws:iam::${get_aws_account_id()}:role/s3-replication-role"
-
-    rules = [
-      {
-        id       = "ReplicateToWestRegion"
-        status   = "Enabled"
-        priority = 1
-
-        filter = {
-          prefix = ""
-        }
-
-        destination = {
-          bucket        = "arn:aws:s3:::loki-logs-${local.environment}-dr-${get_aws_account_id()}"
-          storage_class = "STANDARD_IA"
-
-          replication_time = {
-            status = "Enabled"
-            time   = {
-              minutes = 15
-            }
-          }
-
-          metrics = {
-            status = "Enabled"
-            event_threshold = {
-              minutes = 15
-            }
-          }
-        }
-
-        delete_marker_replication = {
-          status = "Enabled"
-        }
-      }
-    ]
-  } : null
+  # Replicación cross-region para DR (deshabilitado para dev/staging)
+  # Nota: En dev/staging no usamos replication para reducir costos
+  # replication_configuration = {} # Comentado para dev, habilitar en production
 
   # Bucket policy (acceso solo desde VPC y roles específicos)
   attach_policy = true
