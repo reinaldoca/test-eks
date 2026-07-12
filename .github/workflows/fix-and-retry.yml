@@ -1,0 +1,94 @@
+# Workflow temporal para debuggear y fix issues
+name: Fix and Retry Dev
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  cleanup-and-init:
+    name: Cleanup and Initialize Dev
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-terragrunt
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terragrunt
+        uses: ./.github/actions/setup-terragrunt
+        with:
+          terragrunt-version: '1.1.0'
+          terraform-version: '1.15.0'
+
+      - name: Clean cache and lock files
+        working-directory: infrastructure/dev
+        run: |
+          echo "🧹 Cleaning Terragrunt cache..."
+          find . -name ".terragrunt-cache" -type d -exec rm -rf {} + 2>/dev/null || true
+          find . -name ".terraform.lock.hcl" -type f -delete 2>/dev/null || true
+          echo "✅ Cache cleaned"
+
+      - name: Initialize each module individually
+        working-directory: infrastructure/dev
+        run: |
+          echo "🔧 Initializing modules one by one..."
+
+          # VPC first (no dependencies)
+          cd vpc
+          echo "📦 Initializing VPC..."
+          terragrunt init --upgrade || exit 1
+          cd ..
+
+          # S3 (no dependencies)
+          cd s3-loki
+          echo "📦 Initializing S3..."
+          terragrunt init --upgrade || exit 1
+          cd ..
+
+          # ECR (no dependencies)
+          cd ecr
+          echo "📦 Initializing ECR..."
+          terragrunt init --upgrade || exit 1
+          cd ..
+
+          # EKS (depends on VPC)
+          cd eks
+          echo "📦 Initializing EKS..."
+          terragrunt init --upgrade || exit 1
+          cd ..
+
+          # IAM (depends on EKS)
+          cd iam-roles
+          echo "📦 Initializing IAM..."
+          terragrunt init --upgrade || exit 1
+          cd ..
+
+          echo "✅ All modules initialized"
+
+      - name: Validate all modules
+        working-directory: infrastructure/dev
+        run: |
+          echo "✅ Validating all modules..."
+          terragrunt run --all validate
+
+      - name: Show init status
+        run: |
+          echo "### ✅ Dev Environment Initialized" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All modules initialized successfully." >> $GITHUB_STEP_SUMMARY
+          echo "Ready to run plan and apply." >> $GITHUB_STEP_SUMMARY
