@@ -6,6 +6,22 @@ terraform {
   source = "tfr://registry.terraform.io/terraform-aws-modules/eks/aws?version=20.30.0"
 }
 
+# Override provider version solo para EKS (el módulo EKS 20.30.0 requiere AWS provider v5.x)
+generate "versions_override" {
+  path      = "versions_override.tf"
+  if_exists = "overwrite"
+  contents  = <<EOF
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.46.0, < 6.0.0"  # Force v5.x for EKS compatibility
+    }
+  }
+}
+EOF
+}
+
 locals {
   # Cargar variables del entorno
   region_vars = read_terragrunt_config(find_in_parent_folders("region.hcl"))

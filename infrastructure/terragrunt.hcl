@@ -62,20 +62,12 @@ remote_state {
   }
 }
 
-# Generar provider AWS con version constraint para compatibilidad con EKS module
+# Generar solo provider AWS (sin required_providers para evitar conflictos)
+# Los módulos de Registry ya traen su versions.tf
 generate "provider" {
   path      = "provider.tf"
   if_exists = "overwrite_terragrunt"
   contents  = <<EOF
-terraform {
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.70.0"  # v5.x compatible con EKS module 20.30.0
-    }
-  }
-}
-
 provider "aws" {
   region = "${local.aws_region}"
 
