@@ -64,168 +64,32 @@ inputs = {
     }
   }
 
-  # Lifecycle rules
+  # Lifecycle rules (simplificado para dev)
   lifecycle_rule = [
-    # Logs activos (alta performance)
     {
-      id      = "active-logs"
+      id      = "expire-old-logs"
       enabled = true
 
-      filter = {
-        prefix = "active/"
-      }
-
-      transition = [
-        {
-          days          = 7
-          storage_class = "STANDARD_IA"
-        },
-        {
-          days          = 30
-          storage_class = "GLACIER"
-        }
-      ]
-
       expiration = {
-        days = 90
+        days = 90  # Eliminar logs después de 90 días
       }
 
       noncurrent_version_expiration = {
         days = 30
       }
-    },
-
-    # Logs de auditoría (retención más larga por compliance)
-    {
-      id      = "audit-logs"
-      enabled = true
-
-      filter = {
-        prefix = "audit/"
-      }
-
-      transition = [
-        {
-          days          = 90
-          storage_class = "GLACIER"
-        },
-        {
-          days          = 365
-          storage_class = "DEEP_ARCHIVE"
-        }
-      ]
-
-      expiration = {
-        days = 730  # 2 años para compliance (SOC2/ISO27001)
-      }
-
-      noncurrent_version_expiration = {
-        days = 90
-      }
     }
   ]
 
-  # CORS para Grafana (si se accede directo)
-  cors_rule = [
-    {
-      allowed_methods = ["GET", "PUT", "POST"]
-      allowed_origins = ["https://grafana.fintech.com"]
-      allowed_headers = ["*"]
-      expose_headers  = ["ETag"]
-      max_age_seconds = 3000
-    }
-  ]
-
-  # Logging del bucket (para auditoría)
-  logging = {
-    target_bucket = "fintech-access-logs-${local.environment}-${get_aws_account_id()}"
-    target_prefix = "loki-bucket-logs/"
-  }
+  # CORS y Logging deshabilitados para simplificar primer deployment
+  # Se pueden habilitar después
 
   # Replicación cross-region para DR (deshabilitado para dev/staging)
   # Nota: En dev/staging no usamos replication para reducir costos
   # replication_configuration = {} # Comentado para dev, habilitar en production
 
-  # Bucket policy (acceso solo desde VPC y roles específicos)
-  attach_policy = true
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      # Permitir acceso desde VPC (via VPC endpoint)
-      {
-        Sid    = "AllowVPCAccess"
-        Effect = "Allow"
-        Principal = "*"
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:ListBucket"
-        ]
-        Resource = [
-          "arn:aws:s3:::${local.bucket_name}",
-          "arn:aws:s3:::${local.bucket_name}/*"
-        ]
-        Condition = {
-          StringEquals = {
-            "aws:SourceVpc" = "vpc-id-placeholder"  # Reemplazar con VPC ID real
-          }
-        }
-      },
-
-      # Permitir acceso desde roles específicos
-      {
-        Sid    = "AllowOTELCollectorAccess"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${get_aws_account_id()}:role/fintech-eks-${local.environment}-otel-collector"
-        }
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:DeleteObject",
-          "s3:ListBucket"
-        ]
-        Resource = [
-          "arn:aws:s3:::${local.bucket_name}",
-          "arn:aws:s3:::${local.bucket_name}/*"
-        ]
-      },
-
-      # Permitir acceso desde Grafana (read-only)
-      {
-        Sid    = "AllowGrafanaAccess"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${get_aws_account_id()}:role/fintech-eks-${local.environment}-grafana"
-        }
-        Action = [
-          "s3:GetObject",
-          "s3:ListBucket"
-        ]
-        Resource = [
-          "arn:aws:s3:::${local.bucket_name}",
-          "arn:aws:s3:::${local.bucket_name}/*"
-        ]
-      },
-
-      # Denegar acceso sin SSL
-      {
-        Sid    = "DenyInsecureTransport"
-        Effect = "Deny"
-        Principal = "*"
-        Action = "s3:*"
-        Resource = [
-          "arn:aws:s3:::${local.bucket_name}",
-          "arn:aws:s3:::${local.bucket_name}/*"
-        ]
-        Condition = {
-          Bool = {
-            "aws:SecureTransport" = "false"
-          }
-        }
-      }
-    ]
-  })
+  # Bucket policy deshabilitado para primer deployment
+  # Se configurará después cuando existan los roles IAM
+  attach_policy = false
 
   # Tags
   tags = {

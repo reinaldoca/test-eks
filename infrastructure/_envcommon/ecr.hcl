@@ -91,44 +91,9 @@ POLICY
   }
 }
 
-# Repository policy separado (no soportado directamente por el módulo en 2.x)
-resource "aws_ecr_repository_policy" "${replace(service, "-", "_")}_policy" {
-  repository = module.ecr_${replace(service, "-", "_")}.repository_name
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AllowPullFromEKS"
-        Effect = "Allow"
-        Principal = {
-          Service = "eks.amazonaws.com"
-        }
-        Action = [
-          "ecr:GetDownloadUrlForLayer",
-          "ecr:BatchGetImage",
-          "ecr:BatchCheckLayerAvailability"
-        ]
-      },
-      {
-        Sid    = "AllowPushFromGitHubActions"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::$${data.aws_caller_identity.current.account_id}:role/github-actions-ecr"
-        }
-        Action = [
-          "ecr:GetDownloadUrlForLayer",
-          "ecr:BatchGetImage",
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:PutImage",
-          "ecr:InitiateLayerUpload",
-          "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload"
-        ]
-      }
-    ]
-  })
-}
+# Repository policy comentado para primer deployment
+# El rol github-actions-ecr aún no existe
+# Se configurará después cuando se cree el rol con GitHub OIDC
 
 # Output del repository URL
 output "${replace(service, "-", "_")}_repository_url" {
