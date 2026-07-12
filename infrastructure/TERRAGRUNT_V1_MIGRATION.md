@@ -65,6 +65,9 @@ cd infrastructure/production
 # 1. Inicializar (descargar providers)
 terragrunt run --all init
 
+# 1b. Init con upgrade de providers (actualizar a últimas versiones)
+terragrunt run --all init -- -upgrade
+
 # 2. Validar sintaxis
 terragrunt run --all validate
 
@@ -76,6 +79,20 @@ terragrunt run --all apply
 
 # 5. Destroy (eliminar recursos) - ¡CUIDADO!
 terragrunt run --all destroy
+```
+
+### Importante: Separador `--` para flags de Terraform
+
+En Terragrunt 1.x, los flags de Terraform deben ir después de `--`:
+
+```bash
+# ❌ Incorrecto
+terragrunt run --all init -upgrade
+terragrunt run --all plan -out=tfplan
+
+# ✅ Correcto
+terragrunt run --all init -- -upgrade
+terragrunt run --all plan -- -out=tfplan
 ```
 
 ### Comandos por Módulo Específico

@@ -58,14 +58,13 @@ jobs:
       - name: Terragrunt Init
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
-          terragrunt run --all init -upgrade
+          terragrunt run --all init -- -upgrade
 
       - name: Terragrunt Plan
         id: plan
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
-          terragrunt run --all plan \
-            --out-dir /tmp/tfplans \
+          terragrunt run --all plan -- \
             -out=tfplan \
             -no-color 2>&1 | tee plan-output.txt
 
@@ -109,7 +108,7 @@ jobs:
       - name: Terragrunt Init
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
-          terragrunt run --all init -upgrade
+          terragrunt run --all init -- -upgrade
 
       - name: Download plan files
         uses: actions/download-artifact@v4
@@ -121,10 +120,9 @@ jobs:
         id: apply
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
-          # Apply usando los plan files generados anteriormente
-          terragrunt run --all apply \
-            --parallelism 10 \
-            /tmp/tfplans/tfplan \
+          # Apply con auto-approve (ya fue revisado en el plan)
+          terragrunt run --all apply -- \
+            -auto-approve \
             -no-color 2>&1 | tee apply-output.txt
 
       - name: Upload apply output

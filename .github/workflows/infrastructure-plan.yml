@@ -47,7 +47,7 @@ jobs:
       - name: Terragrunt Init
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
-          terragrunt run --all init -upgrade
+          terragrunt run --all init -- -upgrade
 
       - name: Terragrunt Validate
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
@@ -59,8 +59,7 @@ jobs:
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         continue-on-error: true
         run: |
-          terragrunt run --all plan \
-            --out-dir /tmp/tfplans \
+          terragrunt run --all plan -- \
             -no-color 2>&1 | tee plan-output.txt
 
           # Capture exit code
