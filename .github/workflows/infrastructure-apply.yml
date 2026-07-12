@@ -59,14 +59,14 @@ jobs:
       - name: Terragrunt Init
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
-          terragrunt run-all init --terragrunt-non-interactive
+          terragrunt run-all init --non-interactive
 
       - name: Terragrunt Plan
         id: plan
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
           terragrunt run-all plan \
-            --terragrunt-non-interactive \
+            --non-interactive \
             --terragrunt-out-dir /tmp/tfplans \
             -no-color 2>&1 | tee plan-output.txt
 
@@ -75,7 +75,7 @@ jobs:
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
           terragrunt run-all apply \
-            --terragrunt-non-interactive \
+            --non-interactive \
             --terragrunt-parallelism 10 \
             -no-color 2>&1 | tee apply-output.txt
 
