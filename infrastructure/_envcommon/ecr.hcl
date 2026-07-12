@@ -1,9 +1,5 @@
-# ECR Module Common Configuration
-# Repositorios de Docker para microservicios
-
-terraform {
-  source = "tfr://registry.terraform.io/terraform-aws-modules/ecr/aws?version=2.3.0"
-}
+# ECR Configuration
+# NO usar módulo externo, generar código Terraform puro inline
 
 locals {
   # Cargar variables del entorno
@@ -57,38 +53,37 @@ generate "ecr_repositories" {
   if_exists = "overwrite_terragrunt"
   contents  = <<EOF
 %{ for service in local.services ~}
-# ECR Repository para ${service}
-module "ecr_${replace(service, "-", "_")}" {
-  source  = "terraform-aws-modules/ecr/aws"
-  version = "~> 2.0"
+# ECR Repository para ${service} (recurso nativo de Terraform)
+resource "aws_ecr_repository" "${replace(service, "-", "_")}" {
+  name                 = "${service}"
+  image_tag_mutability = "MUTABLE"
 
-  repository_name = "${service}"
+  image_scanning_configuration {
+    scan_on_push = true
+  }
 
-  # Lifecycle policy
-  repository_lifecycle_policy = <<POLICY
-${local.lifecycle_policy}
-POLICY
+  encryption_configuration {
+    encryption_type = "KMS"
+    kms_key         = aws_kms_key.ecr.arn
+  }
 
-  # Image scanning en push
-  repository_image_scan_on_push = true
+  force_delete = false
 
-  # Tag immutability (previene sobrescribir tags)
-  repository_image_tag_mutability = "MUTABLE"
-
-  # Encryption con KMS
-  repository_encryption_type = "KMS"
-  repository_kms_key         = aws_kms_key.ecr.arn
-
-  # Force delete (CUIDADO: elimina repo con imágenes)
-  repository_force_delete = false
-
-  # Tags (usar 'tags' en lugar de 'repository_tags')
   tags = {
     Name        = "${service}"
     Environment = "${local.environment}"
     Service     = "${service}"
     ManagedBy   = "terragrunt"
   }
+}
+
+# Lifecycle policy
+resource "aws_ecr_lifecycle_policy" "${replace(service, "-", "_")}_lifecycle" {
+  repository = aws_ecr_repository.${replace(service, "-", "_")}.name
+
+  policy = <<POLICY
+${local.lifecycle_policy}
+POLICY
 }
 
 # Repository policy comentado para primer deployment
@@ -98,12 +93,12 @@ POLICY
 # Output del repository URL
 output "${replace(service, "-", "_")}_repository_url" {
   description = "URL of ECR repository for ${service}"
-  value       = module.ecr_${replace(service, "-", "_")}.repository_url
+  value       = aws_ecr_repository.${replace(service, "-", "_")}.repository_url
 }
 
 output "${replace(service, "-", "_")}_repository_arn" {
   description = "ARN of ECR repository for ${service}"
-  value       = module.ecr_${replace(service, "-", "_")}.repository_arn
+  value       = aws_ecr_repository.${replace(service, "-", "_")}.arn
 }
 %{ endfor ~}
 
@@ -138,8 +133,8 @@ output "ecr_repositories" {
   value = {
 %{ for service in local.services ~}
     ${service} = {
-      url = module.ecr_${replace(service, "-", "_")}.repository_url
-      arn = module.ecr_${replace(service, "-", "_")}.repository_arn
+      url = aws_ecr_repository.${replace(service, "-", "_")}.repository_url
+      arn = aws_ecr_repository.${replace(service, "-", "_")}.arn
     }
 %{ endfor ~}
   }
