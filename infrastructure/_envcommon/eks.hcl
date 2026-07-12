@@ -2,8 +2,8 @@
 # Módulo reutilizable para EKS Auto Mode en todos los entornos
 
 terraform {
-  # Versión actualizada que es compatible con AWS provider v6.x
-  source = "tfr://registry.terraform.io/terraform-aws-modules/eks/aws?version=20.34.1"
+  # Usar última versión estable de la serie 20.x (compatible con provider AWS v5+)
+  source = "tfr://registry.terraform.io/terraform-aws-modules/eks/aws?version=20.30.0"
 }
 
 locals {
