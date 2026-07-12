@@ -1,31 +1,64 @@
 # GitHub Actions Workflow: Infrastructure Plan
-# Se ejecuta en PRs para mostrar los cambios de infraestructura antes de aplicar
+# Se ejecuta en Pull Requests para mostrar cambios ANTES del merge
 
 name: Infrastructure Plan
 
 on:
   pull_request:
+    branches:
+      - develop
+      - staging
+      - main
     paths:
       - 'infrastructure/**'
       - '.github/workflows/infrastructure-*.yml'
       - '.github/actions/setup-terragrunt/**'
-    branches:
-      - main
-      - develop
 
 permissions:
-  id-token: write  # Required for OIDC
+  id-token: write
   contents: read
-  pull-requests: write  # Para comentar en el PR
+  pull-requests: write  # Para comentar el plan en el PR
 
 env:
   AWS_REGION: us-east-1
-  ENVIRONMENT: production
 
 jobs:
+  # Determinar qué entorno se va a planificar basado en el target branch
+  determine-environment:
+    name: Determine Environment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+    steps:
+      - name: Set environment based on target branch
+        id: set-env
+        run: |
+          case "${{ github.base_ref }}" in
+            develop)
+              echo "environment=dev" >> $GITHUB_OUTPUT
+              ;;
+            staging)
+              echo "environment=staging" >> $GITHUB_OUTPUT
+              ;;
+            main)
+              echo "environment=production" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "environment=dev" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Show environment
+        run: |
+          echo "🎯 Target branch: ${{ github.base_ref }}"
+          echo "🌍 Environment: ${{ steps.set-env.outputs.environment }}"
+
   terragrunt-plan:
     name: Terragrunt Plan
+    needs: determine-environment
     runs-on: ubuntu-latest
+    env:
+      ENVIRONMENT: ${{ needs.determine-environment.outputs.environment }}
 
     steps:
       - name: Checkout code

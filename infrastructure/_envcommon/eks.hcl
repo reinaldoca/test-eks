@@ -90,9 +90,9 @@ inputs = {
   cluster_name    = local.cluster_name
   cluster_version = local.cluster_version
 
-  # VPC y subredes
-  vpc_id     = dependency.vpc.outputs.vpc_id
-  subnet_ids = dependency.vpc.outputs.private_subnets
+  # VPC y subredes (pasados como inputs desde production/eks/terragrunt.hcl)
+  vpc_id     = var.vpc_id
+  subnet_ids = var.subnet_ids
 
   # Control plane
   cluster_endpoint_public_access  = true
@@ -149,7 +149,7 @@ inputs = {
       from_port   = 443
       to_port     = 443
       type        = "ingress"
-      cidr_blocks = [dependency.vpc.outputs.vpc_cidr_block]
+      cidr_blocks = [var.vpc_cidr_block]
     }
   }
 
