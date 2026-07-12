@@ -6,6 +6,7 @@ include "root" {
 include "envcommon" {
   path   = "${dirname(find_in_parent_folders())}/_envcommon/eks.hcl"
   expose = true
+  merge_strategy = "deep"
 }
 
 # Dependency: VPC debe existir primero
@@ -22,13 +23,16 @@ dependency "vpc" {
   }
 }
 
-# Inputs específicos de producción
-inputs = {
+# Locals que el archivo común usará
+locals {
   # VPC outputs desde dependency
   vpc_id         = dependency.vpc.outputs.vpc_id
   subnet_ids     = dependency.vpc.outputs.private_subnets
   vpc_cidr_block = dependency.vpc.outputs.vpc_cidr_block
+}
 
+# Inputs específicos de producción
+inputs = {
   # Overrides para producción (si son necesarios)
   # Por ejemplo, aumentar min_size de node groups
 }
