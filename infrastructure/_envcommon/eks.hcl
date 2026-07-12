@@ -2,7 +2,8 @@
 # Módulo reutilizable para EKS Auto Mode en todos los entornos
 
 terraform {
-  source = "tfr://registry.terraform.io/terraform-aws-modules/eks/aws?version=20.31.0"
+  # Versión actualizada que es compatible con AWS provider v6.x
+  source = "tfr://registry.terraform.io/terraform-aws-modules/eks/aws?version=20.34.1"
 }
 
 locals {
@@ -90,9 +91,10 @@ inputs = {
   cluster_name    = local.cluster_name
   cluster_version = local.cluster_version
 
-  # VPC y subredes
-  vpc_id     = dependency.vpc.outputs.vpc_id
-  subnet_ids = dependency.vpc.outputs.private_subnets
+  # VPC y subredes (estas variables vienen de inputs en el child terragrunt.hcl)
+  # Los valores se pasarán al módulo Terraform como variables de entrada
+  vpc_id     = null  # Se sobreescribirá con inputs
+  subnet_ids = null  # Se sobreescribirá con inputs
 
   # Control plane
   cluster_endpoint_public_access  = true
@@ -149,7 +151,7 @@ inputs = {
       from_port   = 443
       to_port     = 443
       type        = "ingress"
-      cidr_blocks = [dependency.vpc.outputs.vpc_cidr_block]
+      cidr_blocks = ["10.0.0.0/16"]  # Se sobreescribirá con inputs si se proporciona
     }
   }
 

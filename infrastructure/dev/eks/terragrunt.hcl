@@ -1,4 +1,4 @@
-# Production EKS Configuration
+# Development EKS Configuration
 include "root" {
   path = find_in_parent_folders()
 }
@@ -6,6 +6,7 @@ include "root" {
 include "envcommon" {
   path   = "${dirname(find_in_parent_folders())}/_envcommon/eks.hcl"
   expose = true
+  # Merge locals: los valores del archivo común + los valores de aquí
   merge_strategy = "deep"
 }
 
@@ -23,13 +24,18 @@ dependency "vpc" {
   }
 }
 
-# Inputs específicos de producción
+# Inputs específicos de dev
 inputs = {
   # VPC outputs desde dependency (se pasan al módulo Terraform como variables)
   vpc_id         = dependency.vpc.outputs.vpc_id
   subnet_ids     = dependency.vpc.outputs.private_subnets
   vpc_cidr_block = dependency.vpc.outputs.vpc_cidr_block
 
-  # Overrides para producción (si son necesarios)
-  # Por ejemplo, aumentar min_size de node groups
+  # Dev: cluster más pequeño y económico
+  cluster_version = "1.30"
+
+  # Reducir tamaño de node groups para dev
+  # Nota: Estos overrides necesitan coincidir con las variables definidas en _envcommon/eks.hcl
+  # Por ahora, el módulo usará los valores por defecto del _envcommon
+  # Si necesitas ajustes más finos, agregar aquí
 }

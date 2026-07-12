@@ -1,0 +1,189 @@
+# GitHub Actions Workflow: Infrastructure Apply (Manual)
+# Ejecutar manualmente desde Actions tab para deployar cualquier environment
+
+name: Infrastructure Apply (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - production
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        default: 'apply'
+        options:
+          - plan
+          - apply
+          - destroy
+      auto_approve:
+        description: 'Auto-approve apply (skip confirmation)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  infrastructure-operation:
+    name: Terragrunt ${{ inputs.action }} - ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-terragrunt
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-Manual-${{ inputs.environment }}-${{ inputs.action }}
+
+      - name: Setup Terragrunt
+        uses: ./.github/actions/setup-terragrunt
+        with:
+          terragrunt-version: '1.1.0'
+          terraform-version: '1.15.0'
+
+      - name: Terragrunt Init
+        working-directory: infrastructure/${{ inputs.environment }}
+        run: |
+          echo "🔧 Initializing Terragrunt for ${{ inputs.environment }}..."
+          terragrunt run --all init -- -upgrade
+
+      - name: Terragrunt Validate
+        if: inputs.action != 'destroy'
+        working-directory: infrastructure/${{ inputs.environment }}
+        run: |
+          echo "✅ Validating configurations..."
+          terragrunt run --all validate
+
+      - name: Terragrunt Plan
+        id: plan
+        if: inputs.action == 'plan' || inputs.action == 'apply'
+        working-directory: infrastructure/${{ inputs.environment }}
+        run: |
+          echo "📋 Running plan for ${{ inputs.environment }}..."
+          terragrunt run --all plan -- \
+            -no-color \
+            -out=plan.tfplan 2>&1 | tee plan-output.txt
+
+      - name: Upload plan output
+        if: inputs.action == 'plan' || inputs.action == 'apply'
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-${{ inputs.environment }}-${{ github.run_number }}
+          path: infrastructure/${{ inputs.environment }}/plan-output.txt
+          retention-days: 30
+
+      - name: Terragrunt Apply
+        if: inputs.action == 'apply'
+        working-directory: infrastructure/${{ inputs.environment }}
+        run: |
+          echo "🚀 Applying changes to ${{ inputs.environment }}..."
+
+          if [ "${{ inputs.auto_approve }}" = "true" ]; then
+            echo "⚠️  Auto-approve enabled, applying without confirmation..."
+            terragrunt run --all apply -- \
+              -auto-approve \
+              -no-color 2>&1 | tee apply-output.txt
+          else
+            echo "📋 Applying plan.tfplan..."
+            terragrunt run --all apply plan.tfplan 2>&1 | tee apply-output.txt
+          fi
+
+      - name: Upload apply output
+        if: inputs.action == 'apply'
+        uses: actions/upload-artifact@v4
+        with:
+          name: apply-${{ inputs.environment }}-${{ github.run_number }}
+          path: infrastructure/${{ inputs.environment }}/apply-output.txt
+          retention-days: 90
+
+      - name: Terragrunt Destroy
+        if: inputs.action == 'destroy'
+        working-directory: infrastructure/${{ inputs.environment }}
+        run: |
+          echo "🗑️  Destroying infrastructure in ${{ inputs.environment }}..."
+          echo "⚠️  THIS WILL DELETE ALL RESOURCES!"
+
+          terragrunt run --all destroy -- \
+            -auto-approve \
+            -no-color 2>&1 | tee destroy-output.txt
+
+      - name: Upload destroy output
+        if: inputs.action == 'destroy'
+        uses: actions/upload-artifact@v4
+        with:
+          name: destroy-${{ inputs.environment }}-${{ github.run_number }}
+          path: infrastructure/${{ inputs.environment }}/destroy-output.txt
+          retention-days: 90
+
+      - name: Extract outputs
+        if: inputs.action == 'apply'
+        id: outputs
+        working-directory: infrastructure/${{ inputs.environment }}
+        continue-on-error: true
+        run: |
+          echo "📊 Extracting outputs..."
+
+          cd vpc 2>/dev/null || { echo "vpc directory not found"; exit 0; }
+          VPC_ID=$(terragrunt output -raw vpc_id 2>/dev/null || echo "not-available")
+          echo "vpc_id=$VPC_ID" >> $GITHUB_OUTPUT
+          cd ..
+
+          cd eks 2>/dev/null || { echo "eks directory not found"; exit 0; }
+          CLUSTER_NAME=$(terragrunt output -raw cluster_name 2>/dev/null || echo "not-available")
+          echo "cluster_name=$CLUSTER_NAME" >> $GITHUB_OUTPUT
+          cd ..
+
+      - name: Summary
+        run: |
+          echo "### ${{ inputs.action == 'apply' && '✅' || inputs.action == 'destroy' && '🗑️' || '📋' }} Terragrunt ${{ inputs.action }} - ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Action:** ${{ inputs.action }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**AWS Region:** ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ inputs.action }}" = "apply" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**VPC ID:** ${{ steps.outputs.outputs.vpc_id }}" >> $GITHUB_STEP_SUMMARY
+            echo "**EKS Cluster:** ${{ steps.outputs.outputs.cluster_name }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Notify on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🚨 Infrastructure ${{ inputs.action }} Failed - ${{ inputs.environment }}`,
+              body: `Infrastructure ${{ inputs.action }} failed for environment: **${{ inputs.environment }}**
+
+              **Action:** ${{ inputs.action }}
+              **Workflow:** ${{ github.workflow }}
+              **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+              **Actor:** @${{ github.actor }}
+
+              Please check the workflow logs for details.`,
+              labels: ['infrastructure', 'failure', inputs.environment]
+            });

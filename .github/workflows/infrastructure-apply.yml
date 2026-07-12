@@ -90,7 +90,7 @@ jobs:
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
           echo "🚀 Applying infrastructure changes..."
-          terragrunt run --all apply -- \
+          terragrunt run --all --non-interactive apply -- \
             -auto-approve \
             -no-color 2>&1 | tee apply-output.txt
 
@@ -126,7 +126,7 @@ jobs:
           cd ..
 
       - name: Update kubeconfig
-        if: steps.outputs.outputs.cluster_name != 'not-available'
+        if: steps.outputs.outputs.cluster_name != 'not-available' && steps.outputs.outputs.cluster_name != ''
         run: |
           echo "🔧 Updating kubeconfig..."
           aws eks update-kubeconfig \
@@ -134,7 +134,7 @@ jobs:
             --name ${{ steps.outputs.outputs.cluster_name }}
 
       - name: Verify cluster access
-        if: steps.outputs.outputs.cluster_name != 'not-available'
+        if: steps.outputs.outputs.cluster_name != 'not-available' && steps.outputs.outputs.cluster_name != ''
         run: |
           echo "✅ Verifying cluster access..."
           kubectl cluster-info
