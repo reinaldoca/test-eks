@@ -68,7 +68,7 @@ generate "provider" {
   if_exists = "overwrite_terragrunt"
   contents  = <<EOF
 terraform {
-  required_version = ">= 1.6.0"
+  required_version = ">= 1.15.0"
 
   required_providers {
     aws = {
@@ -142,23 +142,23 @@ terraform {
     commands  = get_terraform_commands_that_need_parallelism()
     arguments = ["-parallelism=20"]
   }
+
+  # Hook para ejecutar antes de cada comando
+  # Útil para validaciones y preparación del entorno
+  before_hook "before_hook" {
+    commands     = ["apply", "plan"]
+    execute      = ["echo", "🚀 Ejecutando Terragrunt en ${local.environment}..."]
+    run_on_error = true
+  }
+
+  # Hook después de cada apply exitoso
+  after_hook "after_hook" {
+    commands     = ["apply"]
+    execute      = ["echo", "✅ Infraestructura aplicada exitosamente en ${local.environment}"]
+    run_on_error = false
+  }
 }
 
-# Hooks before/after para auditoría
-terraform_version_constraint  = ">= 1.6.0"
-terragrunt_version_constraint = ">= 0.54.0"
-
-# Hook para ejecutar antes de cada comando
-# Útil para validaciones y preparación del entorno
-before_hook "before_hook" {
-  commands     = ["apply", "plan"]
-  execute      = ["echo", "🚀 Ejecutando Terragrunt en ${local.environment}..."]
-  run_on_error = true
-}
-
-# Hook después de cada apply exitoso
-after_hook "after_hook" {
-  commands     = ["apply"]
-  execute      = ["echo", "✅ Infraestructura aplicada exitosamente en ${local.environment}"]
-  run_on_error = false
-}
+# Constraints de versión
+terraform_version_constraint  = ">= 1.15.0"
+terragrunt_version_constraint = ">= 1.1.0"

@@ -41,8 +41,8 @@ jobs:
       - name: Setup Terragrunt
         uses: ./.github/actions/setup-terragrunt
         with:
-          terragrunt-version: '0.54.0'
-          terraform-version: '1.6.6'
+          terragrunt-version: '1.1.0'
+          terraform-version: '1.15.0'
 
       - name: Terragrunt Init
         working-directory: infrastructure/${{ env.ENVIRONMENT }}

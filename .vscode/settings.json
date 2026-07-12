@@ -1,0 +1,15 @@
+{
+  "files.associations": {
+    "**/infrastructure/**/*.hcl": "terragrunt"
+  },
+  "terraform.languageServer": {
+    "enabled": true,
+    "args": []
+  },
+  "[terragrunt]": {
+    "editor.defaultFormatter": "hashicorp.terraform",
+    "editor.formatOnSave": true
+  },
+  // Deshabilitar validación de Terraform en archivos Terragrunt
+  "terraform.validation.enableEnhancedValidation": false
+}

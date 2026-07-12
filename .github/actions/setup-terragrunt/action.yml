@@ -8,11 +8,11 @@ inputs:
   terraform-version:
     description: 'Terraform version to install'
     required: false
-    default: '1.6.6'
+    default: '1.15.0'
   terragrunt-version:
     description: 'Terragrunt version to install'
     required: false
-    default: '0.54.0'
+    default: '1.1.0'
 
 runs:
   using: 'composite'
