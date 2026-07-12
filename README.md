@@ -139,8 +139,15 @@ git push origin main
 #### 1. Desplegar Infraestructura
 ```bash
 cd infrastructure/production
-terragrunt run-all init
-terragrunt run-all apply
+
+# Init (instalar providers)
+terragrunt run --all init
+
+# Plan (revisar cambios)
+terragrunt run --all plan
+
+# Apply (aplicar cambios)
+terragrunt run --all apply
 ```
 
 #### 2. Bootstrap ArgoCD

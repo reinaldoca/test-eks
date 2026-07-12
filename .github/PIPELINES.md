@@ -90,7 +90,7 @@ terragrunt apply
 
 # O desplegar todo junto:
 cd infrastructure/production
-terragrunt run-all apply
+terragrunt run --all apply
 # → Incluye VPC, EKS, S3, IAM, ECR
 ```
 

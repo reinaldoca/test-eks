@@ -34,9 +34,59 @@ env:
   ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
 
 jobs:
+  terragrunt-plan:
+    name: Terragrunt Plan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-terragrunt
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-InfraPlan
+
+      - name: Setup Terragrunt
+        uses: ./.github/actions/setup-terragrunt
+        with:
+          terragrunt-version: '1.1.0'
+          terraform-version: '1.15.0'
+
+      - name: Terragrunt Init
+        working-directory: infrastructure/${{ env.ENVIRONMENT }}
+        run: |
+          terragrunt run --all init -upgrade
+
+      - name: Terragrunt Plan
+        id: plan
+        working-directory: infrastructure/${{ env.ENVIRONMENT }}
+        run: |
+          terragrunt run --all plan \
+            --out-dir /tmp/tfplans \
+            -out=tfplan \
+            -no-color 2>&1 | tee plan-output.txt
+
+      - name: Upload plan files
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplans
+          path: /tmp/tfplans
+          retention-days: 7
+
+      - name: Upload plan output
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-output
+          path: infrastructure/${{ env.ENVIRONMENT }}/plan-output.txt
+          retention-days: 7
+
   terragrunt-apply:
     name: Terragrunt Apply
     runs-on: ubuntu-latest
+    needs: terragrunt-plan
     environment: ${{ github.event.inputs.environment || 'production' }}
 
     steps:
@@ -59,24 +109,22 @@ jobs:
       - name: Terragrunt Init
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
-          terragrunt run-all init --non-interactive
+          terragrunt run --all init -upgrade
 
-      - name: Terragrunt Plan
-        id: plan
-        working-directory: infrastructure/${{ env.ENVIRONMENT }}
-        run: |
-          terragrunt run-all plan \
-            --non-interactive \
-            --terragrunt-out-dir /tmp/tfplans \
-            -no-color 2>&1 | tee plan-output.txt
+      - name: Download plan files
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplans
+          path: /tmp/tfplans
 
       - name: Terragrunt Apply
         id: apply
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
-          terragrunt run-all apply \
-            --non-interactive \
-            --terragrunt-parallelism 10 \
+          # Apply usando los plan files generados anteriormente
+          terragrunt run --all apply \
+            --parallelism 10 \
+            /tmp/tfplans/tfplan \
             -no-color 2>&1 | tee apply-output.txt
 
       - name: Upload apply output

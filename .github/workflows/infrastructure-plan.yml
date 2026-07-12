@@ -47,21 +47,20 @@ jobs:
       - name: Terragrunt Init
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
-          terragrunt run-all init --non-interactive
+          terragrunt run --all init -upgrade
 
       - name: Terragrunt Validate
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
-          terragrunt run-all validate --non-interactive
+          terragrunt run --all validate
 
       - name: Terragrunt Plan
         id: plan
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         continue-on-error: true
         run: |
-          terragrunt run-all plan \
-            --non-interactive \
-            --terragrunt-out-dir /tmp/tfplans \
+          terragrunt run --all plan \
+            --out-dir /tmp/tfplans \
             -no-color 2>&1 | tee plan-output.txt
 
           # Capture exit code
