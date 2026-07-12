@@ -66,22 +66,18 @@ jobs:
       - name: Terragrunt Init
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
-          terragrunt run --all init -- -upgrade
+          set -e  # Exit on any error
+          terragrunt run --all --non-interactive init -- -upgrade
 
       - name: Terragrunt Plan (verification)
         id: plan
         if: github.event.inputs.skip_plan != 'true'
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
+          set -e  # Exit on any error
+          set -o pipefail  # Exit if any command in pipe fails
           echo "Running plan verification before apply..."
-          terragrunt run --all --non-interactive plan -- \
-            -no-color 2>&1 | tee plan-verification.txt
-
-          # Exit with error if plan failed
-          if [ $? -ne 0 ]; then
-            echo "❌ Terragrunt plan failed. Stopping before apply."
-            exit 1
-          fi
+          terragrunt run --all --non-interactive plan -- -no-color | tee plan-verification.txt
 
       - name: Upload plan verification
         if: github.event.inputs.skip_plan != 'true'
@@ -95,10 +91,10 @@ jobs:
         id: apply
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
+          set -e  # Exit on any error
+          set -o pipefail  # Exit if any command in pipe fails
           echo "🚀 Applying infrastructure changes..."
-          terragrunt run --all --non-interactive apply -- \
-            -auto-approve \
-            -no-color 2>&1 | tee apply-output.txt
+          terragrunt run --all --non-interactive apply -- -auto-approve -no-color | tee apply-output.txt
 
       - name: Upload apply output
         uses: actions/upload-artifact@v4

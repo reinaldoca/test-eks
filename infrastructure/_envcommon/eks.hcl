@@ -47,7 +47,7 @@ locals {
       taints = [{
         key    = "critical"
         value  = "true"
-        effect = "NoSchedule"
+        effect = "NO_SCHEDULE"
       }]
 
       labels = {
@@ -80,7 +80,7 @@ locals {
       taints = [{
         key    = "spot"
         value  = "true"
-        effect = "NoSchedule"
+        effect = "NO_SCHEDULE"
       }]
 
       labels = {
