@@ -73,7 +73,7 @@ POLICY
   repository_image_scan_on_push = true
 
   # Tag immutability (previene sobrescribir tags)
-  repository_image_tag_mutability = "MUTABLE"  # Cambiar a IMMUTABLE en producción
+  repository_image_tag_mutability = "MUTABLE"
 
   # Encryption con KMS
   repository_encryption_type = "KMS"
@@ -82,26 +82,20 @@ POLICY
   # Force delete (CUIDADO: elimina repo con imágenes)
   repository_force_delete = false
 
-  # Replication configuration (opcional, para DR)
-  repository_replication_configuration = %{ if local.environment == "production" }
-  {
-    replicationConfiguration = {
-      rules = [
-        {
-          destinations = [
-            {
-              region      = "us-west-2"
-              registryId  = data.aws_caller_identity.current.account_id
-            }
-          ]
-        }
-      ]
-    }
+  # Tags via module's built-in support
+  repository_tags = {
+    Name        = "${service}"
+    Environment = "${local.environment}"
+    Service     = "${service}"
+    ManagedBy   = "terragrunt"
   }
-  %{ else }null%{ endif }
+}
 
-  # Repository policy (permitir pull desde EKS)
-  repository_policy = jsonencode({
+# Repository policy separado (no soportado directamente por el módulo en 2.x)
+resource "aws_ecr_repository_policy" "${replace(service, "-", "_")}_policy" {
+  repository = module.ecr_${replace(service, "-", "_")}.repository_name
+
+  policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
@@ -134,14 +128,6 @@ POLICY
       }
     ]
   })
-
-  # Tags
-  tags = {
-    Name        = "${service}"
-    Environment = "${local.environment}"
-    Service     = "${service}"
-    ManagedBy   = "terragrunt"
-  }
 }
 
 # Output del repository URL

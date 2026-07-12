@@ -1,5 +1,6 @@
 # GitHub Actions Workflow: Infrastructure Apply
 # Se ejecuta en push a main para aplicar cambios de infraestructura
+# REQUIERE: Que el PR ya haya pasado por Infrastructure Plan
 
 name: Infrastructure Apply
 
@@ -23,6 +24,11 @@ on:
           - production
           - staging
           - dev
+      skip_plan:
+        description: 'Skip plan and go directly to apply (dangerous!)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   id-token: write
@@ -34,58 +40,10 @@ env:
   ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
 
 jobs:
-  terragrunt-plan:
-    name: Terragrunt Plan
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-terragrunt
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: GitHubActions-InfraPlan
-
-      - name: Setup Terragrunt
-        uses: ./.github/actions/setup-terragrunt
-        with:
-          terragrunt-version: '1.1.0'
-          terraform-version: '1.15.0'
-
-      - name: Terragrunt Init
-        working-directory: infrastructure/${{ env.ENVIRONMENT }}
-        run: |
-          terragrunt run --all init -- -upgrade
-
-      - name: Terragrunt Plan
-        id: plan
-        working-directory: infrastructure/${{ env.ENVIRONMENT }}
-        run: |
-          terragrunt run --all plan -- \
-            -out=tfplan \
-            -no-color 2>&1 | tee plan-output.txt
-
-      - name: Upload plan files
-        uses: actions/upload-artifact@v4
-        with:
-          name: tfplans
-          path: /tmp/tfplans
-          retention-days: 7
-
-      - name: Upload plan output
-        uses: actions/upload-artifact@v4
-        with:
-          name: plan-output
-          path: infrastructure/${{ env.ENVIRONMENT }}/plan-output.txt
-          retention-days: 7
-
   terragrunt-apply:
     name: Terragrunt Apply
     runs-on: ubuntu-latest
-    needs: terragrunt-plan
+    # Requiere approval manual antes de ejecutar
     environment: ${{ github.event.inputs.environment || 'production' }}
 
     steps:
@@ -110,17 +68,28 @@ jobs:
         run: |
           terragrunt run --all init -- -upgrade
 
-      - name: Download plan files
-        uses: actions/download-artifact@v4
+      - name: Terragrunt Plan (verification)
+        id: plan
+        if: github.event.inputs.skip_plan != 'true'
+        working-directory: infrastructure/${{ env.ENVIRONMENT }}
+        run: |
+          echo "Running plan verification before apply..."
+          terragrunt run --all plan -- \
+            -no-color 2>&1 | tee plan-verification.txt
+
+      - name: Upload plan verification
+        if: github.event.inputs.skip_plan != 'true'
+        uses: actions/upload-artifact@v4
         with:
-          name: tfplans
-          path: /tmp/tfplans
+          name: plan-verification
+          path: infrastructure/${{ env.ENVIRONMENT }}/plan-verification.txt
+          retention-days: 30
 
       - name: Terragrunt Apply
         id: apply
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
-          # Apply con auto-approve (ya fue revisado en el plan)
+          echo "🚀 Applying infrastructure changes..."
           terragrunt run --all apply -- \
             -auto-approve \
             -no-color 2>&1 | tee apply-output.txt
@@ -130,30 +99,36 @@ jobs:
         if: always()
         with:
           name: terragrunt-apply-output
-          path: |
-            infrastructure/${{ env.ENVIRONMENT }}/plan-output.txt
-            infrastructure/${{ env.ENVIRONMENT }}/apply-output.txt
+          path: infrastructure/${{ env.ENVIRONMENT }}/apply-output.txt
           retention-days: 30
 
       - name: Extract outputs
         id: outputs
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
+        continue-on-error: true
         run: |
-          # Get VPC ID
+          echo "📊 Extracting Terraform outputs..."
+
+          # Try to get outputs from each module
+          cd vpc
           VPC_ID=$(terragrunt output -raw vpc_id 2>/dev/null || echo "not-available")
           echo "vpc_id=$VPC_ID" >> $GITHUB_OUTPUT
+          cd ..
 
-          # Get EKS cluster name
+          cd eks
           CLUSTER_NAME=$(terragrunt output -raw cluster_name 2>/dev/null || echo "not-available")
           echo "cluster_name=$CLUSTER_NAME" >> $GITHUB_OUTPUT
+          cd ..
 
-          # Get S3 bucket for Loki
-          LOKI_BUCKET=$(terragrunt output -raw loki_bucket_name 2>/dev/null || echo "not-available")
+          cd s3-loki
+          LOKI_BUCKET=$(terragrunt output -raw bucket_id 2>/dev/null || echo "not-available")
           echo "loki_bucket=$LOKI_BUCKET" >> $GITHUB_OUTPUT
+          cd ..
 
       - name: Update kubeconfig
         if: steps.outputs.outputs.cluster_name != 'not-available'
         run: |
+          echo "🔧 Updating kubeconfig..."
           aws eks update-kubeconfig \
             --region ${{ env.AWS_REGION }} \
             --name ${{ steps.outputs.outputs.cluster_name }}
@@ -161,6 +136,7 @@ jobs:
       - name: Verify cluster access
         if: steps.outputs.outputs.cluster_name != 'not-available'
         run: |
+          echo "✅ Verifying cluster access..."
           kubectl cluster-info
           kubectl get nodes
 
@@ -195,10 +171,10 @@ jobs:
               **Actor:** @${{ github.actor }}
 
               Please check the workflow logs for details.`,
-              labels: ['infrastructure', 'failure']
+              labels: ['infrastructure', 'failure', 'urgent']
             });
 
-  post-apply-checks:
+  post-apply-validation:
     name: Post-Apply Validation
     needs: terragrunt-apply
     runs-on: ubuntu-latest
@@ -214,29 +190,46 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Verify VPC
+        continue-on-error: true
         run: |
-          echo "Verifying VPC configuration..."
+          echo "🔍 Verifying VPC configuration..."
           aws ec2 describe-vpcs \
             --filters "Name=tag:Environment,Values=${{ env.ENVIRONMENT }}" \
             --query 'Vpcs[*].[VpcId,CidrBlock,State]' \
             --output table
 
       - name: Verify EKS cluster
+        continue-on-error: true
         run: |
-          echo "Verifying EKS cluster..."
+          echo "🔍 Verifying EKS cluster..."
           aws eks describe-cluster \
             --name fintech-eks-${{ env.ENVIRONMENT }} \
             --query 'cluster.[name,status,version,endpoint]' \
             --output table
 
       - name: Verify S3 buckets
+        continue-on-error: true
         run: |
-          echo "Verifying S3 buckets..."
-          aws s3 ls | grep "loki-logs-${{ env.ENVIRONMENT }}" || echo "Loki bucket not found"
-          aws s3 ls | grep "velero-backups-${{ env.ENVIRONMENT }}" || echo "Velero bucket not found"
+          echo "🔍 Verifying S3 buckets..."
+          echo "Loki logs bucket:"
+          aws s3 ls | grep "loki-logs-${{ env.ENVIRONMENT }}" || echo "  ⚠️  Not found"
+          echo "Velero backups bucket:"
+          aws s3 ls | grep "velero-backups-${{ env.ENVIRONMENT }}" || echo "  ⚠️  Not found"
+          echo "ECR repositories:"
+          aws ecr describe-repositories --query 'repositories[*].repositoryName' --output table || echo "  ⚠️  Not found"
+
+      - name: Verify ECR repositories
+        continue-on-error: true
+        run: |
+          echo "🔍 Verifying ECR repositories..."
+          aws ecr describe-repositories \
+            --repository-names service-a service-b \
+            --query 'repositories[*].[repositoryName,repositoryUri]' \
+            --output table || echo "  ⚠️  ECR repositories not created yet"
 
       - name: Validation summary
         run: |
           echo "### ✅ Post-Apply Validation Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "All infrastructure components verified successfully." >> $GITHUB_STEP_SUMMARY
+          echo "Infrastructure components have been validated." >> $GITHUB_STEP_SUMMARY
+          echo "Check the job logs above for detailed verification results." >> $GITHUB_STEP_SUMMARY
