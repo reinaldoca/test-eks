@@ -213,7 +213,11 @@ module "irsa_${replace(sa_name, "-", "_")}" {
   }
 
   %{ if length(sa_config.policies) > 0 ~}
-  role_policy_arns = ${jsonencode(sa_config.policies)}
+  role_policy_arns = {
+    %{ for idx, policy in sa_config.policies ~}
+    policy_${idx} = "${policy}"
+    %{ endfor ~}
+  }
   %{ endif ~}
 
   tags = {
