@@ -82,8 +82,8 @@ POLICY
   # Force delete (CUIDADO: elimina repo con imágenes)
   repository_force_delete = false
 
-  # Tags via module's built-in support
-  repository_tags = {
+  # Tags (usar 'tags' en lugar de 'repository_tags')
+  tags = {
     Name        = "${service}"
     Environment = "${local.environment}"
     Service     = "${service}"
@@ -142,8 +142,7 @@ output "${replace(service, "-", "_")}_repository_arn" {
 }
 %{ endfor ~}
 
-# Data sources
-data "aws_caller_identity" "current" {}
+# Data sources (eliminado, el módulo ECR ya lo incluye)
 
 # KMS key para ECR encryption
 resource "aws_kms_key" "ecr" {
