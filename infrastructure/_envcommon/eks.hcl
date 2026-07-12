@@ -220,7 +220,11 @@ inputs = {
   ]
 
   # Retention de logs (compliance: 2 años)
-  cloudwatch_log_group_retention_in_days = 730
+  # CloudWatch logs retention (731 es el valor válido más cercano a 730/2 años)
+  cloudwatch_log_group_retention_in_days = 731
+
+  # Bootstrap addons (required variable en EKS module)
+  bootstrap_self_managed_addons = false
 
   # Tags
   tags = {

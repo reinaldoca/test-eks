@@ -74,8 +74,14 @@ jobs:
         working-directory: infrastructure/${{ env.ENVIRONMENT }}
         run: |
           echo "Running plan verification before apply..."
-          terragrunt run --all plan -- \
+          terragrunt run --all --non-interactive plan -- \
             -no-color 2>&1 | tee plan-verification.txt
+
+          # Exit with error if plan failed
+          if [ $? -ne 0 ]; then
+            echo "❌ Terragrunt plan failed. Stopping before apply."
+            exit 1
+          fi
 
       - name: Upload plan verification
         if: github.event.inputs.skip_plan != 'true'
