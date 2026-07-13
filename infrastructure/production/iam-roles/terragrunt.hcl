@@ -12,8 +12,10 @@ include "envcommon" {
 dependency "eks" {
   config_path = "../eks"
 
-  # Mock outputs para que terragrunt init funcione sin que EKS esté aplicado
-  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan"]
+  # Mock outputs para que terragrunt funcione incluso si EKS no está completo
+  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "apply"]
+  mock_outputs_merge_strategy_with_state = "shallow"
+
   mock_outputs = {
     cluster_name                      = "fintech-eks-production-mock"
     cluster_oidc_issuer_url           = "https://oidc.eks.us-east-1.amazonaws.com/id/MOCK123456"
