@@ -38,8 +38,8 @@ locals {
                 "s3:ListBucket"
               ]
               Resource = [
-                "arn:aws:s3:::loki-logs-${local.environment}-*",
-                "arn:aws:s3:::loki-logs-${local.environment}-*/*"
+                "arn:aws:s3:::loki-logs-$${var.environment}-*",
+                "arn:aws:s3:::loki-logs-$${var.environment}-*/*"
               ]
             }
           ]
@@ -64,8 +64,8 @@ locals {
                 "s3:ListBucket"
               ]
               Resource = [
-                "arn:aws:s3:::loki-logs-${local.environment}-*",
-                "arn:aws:s3:::loki-logs-${local.environment}-*/*"
+                "arn:aws:s3:::loki-logs-$${var.environment}-*",
+                "arn:aws:s3:::loki-logs-$${var.environment}-*/*"
               ]
             },
             {
@@ -97,7 +97,7 @@ locals {
                 "secretsmanager:DescribeSecret",
                 "secretsmanager:ListSecrets"
               ]
-              Resource = "arn:aws:secretsmanager:${local.aws_region}:${get_aws_account_id()}:secret:${local.environment}/*"
+              Resource = "arn:aws:secretsmanager:${local.aws_region}:${get_aws_account_id()}:secret:$${var.environment}/*"
             },
             {
               Effect = "Allow"
@@ -155,8 +155,8 @@ locals {
                 "s3:ListMultipartUploadParts"
               ]
               Resource = [
-                "arn:aws:s3:::velero-backups-${local.environment}",
-                "arn:aws:s3:::velero-backups-${local.environment}/*"
+                "arn:aws:s3:::velero-backups-$${var.environment}",
+                "arn:aws:s3:::velero-backups-$${var.environment}/*"
               ]
             },
             {
@@ -179,20 +179,38 @@ locals {
 }
 
 # Dependencias
-dependency "eks" {
-  config_path = "../eks"
+# NOTA: Ya no dependemos del módulo EKS via dependency porque usamos data sources
+# para obtener el OIDC provider directamente desde AWS
+# dependency "eks" {
+#   config_path = "../eks"
+# }
 
-  # Permitir usar mocks en cualquier comando
-  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "apply", "destroy"]
+# Generar data sources para obtener el OIDC provider
+generate "data_sources" {
+  path      = "data_sources.tf"
+  if_exists = "overwrite_terragrunt"
+  contents  = <<EOF
+# Data source para obtener el cluster EKS
+data "aws_eks_cluster" "this" {
+  name = var.cluster_name
+}
 
-  # Si hay valores en el state, combinarlos con los mocks (shallow = los mocks ganan si el state está vacío)
-  mock_outputs_merge_strategy_with_state = "shallow"
+# Data source para obtener el OIDC provider basado en el issuer URL del cluster
+data "aws_iam_openid_connect_provider" "this" {
+  url = data.aws_eks_cluster.this.identity[0].oidc[0].issuer
+}
 
-  mock_outputs = {
-    cluster_name                         = "fintech-eks-dev"
-    cluster_oidc_issuer_url              = "https://oidc.eks.us-east-1.amazonaws.com/id/MOCK123456789ABCDEF"
-    oidc_provider_arn                    = "arn:aws:iam::475274912371:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/MOCK123456789ABCDEF"
-  }
+# Variables de entrada
+variable "cluster_name" {
+  description = "Name of the EKS cluster"
+  type        = string
+}
+
+variable "environment" {
+  description = "Environment name"
+  type        = string
+}
+EOF
 }
 
 # Generar un módulo Terraform inline para crear múltiples roles IRSA
@@ -209,11 +227,11 @@ module "irsa_${replace(sa_name, "-", "_")}" {
   source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
   version = "~> 5.30"
 
-  role_name = "${local.cluster_name}-${sa_name}"
+  role_name = "$${var.cluster_name}-${sa_name}"
 
   oidc_providers = {
     main = {
-      provider_arn               = "${dependency.eks.outputs.oidc_provider_arn}"
+      provider_arn               = data.aws_iam_openid_connect_provider.this.arn
       namespace_service_accounts = ["${sa_config.namespace}:${sa_name}"]
     }
   }
@@ -227,8 +245,8 @@ module "irsa_${replace(sa_name, "-", "_")}" {
   %{ endif ~}
 
   tags = {
-    Name        = "${local.cluster_name}-${sa_name}"
-    Environment = "${local.environment}"
+    Name        = "$${var.cluster_name}-${sa_name}"
+    Environment = var.environment
     ServiceAccount = "${sa_name}"
   }
 }
@@ -255,35 +273,35 @@ output "${replace(sa_name, "-", "_")}_role_arn" {
 
 # KMS Key para encriptación de secrets
 resource "aws_kms_key" "secrets" {
-  description             = "KMS key for secrets encryption in ${local.environment}"
+  description             = "KMS key for secrets encryption in $${var.environment}"
   deletion_window_in_days = 30
   enable_key_rotation     = true
 
   tags = {
-    Name        = "secrets-encryption-key-${local.environment}"
-    Environment = "${local.environment}"
+    Name        = "secrets-encryption-key-$${var.environment}"
+    Environment = var.environment
   }
 }
 
 resource "aws_kms_alias" "secrets" {
-  name          = "alias/secrets-manager-key-${local.environment}"
+  name          = "alias/secrets-manager-key-$${var.environment}"
   target_key_id = aws_kms_key.secrets.key_id
 }
 
 # KMS Key para Loki encryption
 resource "aws_kms_key" "loki" {
-  description             = "KMS key for Loki logs encryption in ${local.environment}"
+  description             = "KMS key for Loki logs encryption in $${var.environment}"
   deletion_window_in_days = 30
   enable_key_rotation     = true
 
   tags = {
-    Name        = "loki-encryption-key-${local.environment}"
-    Environment = "${local.environment}"
+    Name        = "loki-encryption-key-$${var.environment}"
+    Environment = var.environment
   }
 }
 
 resource "aws_kms_alias" "loki" {
-  name          = "alias/loki-encryption-key"
+  name          = "alias/loki-encryption-key-$${var.environment}"
   target_key_id = aws_kms_key.loki.key_id
 }
 
