@@ -8,23 +8,8 @@ include "envcommon" {
   expose = true
 }
 
-# Dependency: EKS debe existir primero (para OIDC provider)
-dependency "eks" {
-  config_path = "../eks"
-
-  # Mock outputs para que terragrunt funcione incluso si EKS no está completo
-  # Si el state tiene valores, los usará; si no, usará los mocks
-  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "apply"]
-  mock_outputs_merge_strategy_with_state = "shallow"
-
-  mock_outputs = {
-    cluster_name                      = "fintech-eks-dev-mock"
-    cluster_oidc_issuer_url           = "https://oidc.eks.us-east-1.amazonaws.com/id/MOCK123456"
-    oidc_provider_arn                 = "arn:aws:iam::475274912371:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/MOCK123456"
-    cluster_endpoint                  = "https://MOCK123.eks.us-east-1.amazonaws.com"
-    cluster_certificate_authority_data = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JPEG="
-  }
-}
+# NOTA: Ya no necesitamos dependency de EKS porque usamos data sources
+# en _envcommon/iam.hcl para obtener el OIDC provider directamente desde AWS
 
 # Inputs específicos de producción
 inputs = {
