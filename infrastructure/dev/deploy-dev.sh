@@ -10,6 +10,7 @@
 #   destroy   Destruir toda la infraestructura
 #   validate  Validar configuración sin ejecutar plan
 #   output    Mostrar outputs de la infraestructura
+#   unlock    Liberar state locks de DynamoDB (si el workflow se cancela)
 #   all       Ejecutar init + validate + plan + apply (interactivo)
 #
 # Opciones:
@@ -52,6 +53,7 @@ print_usage() {
   echo "  destroy   Destruir toda la infraestructura"
   echo "  validate  Validar configuración sin ejecutar plan"
   echo "  output    Mostrar outputs de la infraestructura"
+  echo "  unlock    Liberar state locks de DynamoDB (si el workflow se cancela)"
   echo "  all       Ejecutar init + validate + plan + apply (interactivo)"
   echo ""
   echo "Opciones:"
@@ -307,6 +309,64 @@ cmd_output() {
   done
 }
 
+# Comando: unlock (liberar state locks)
+cmd_unlock() {
+  log_step "🔓 Liberando state locks de DynamoDB..."
+  echo ""
+
+  DYNAMODB_TABLE="fintech-platform-terraform-locks"
+
+  log_info "DynamoDB Table: ${DYNAMODB_TABLE}"
+  echo ""
+
+  # Listar locks actuales
+  log_info "Listando locks actuales..."
+  LOCKS=$(aws dynamodb scan \
+    --table-name "${DYNAMODB_TABLE}" \
+    --region us-east-1 \
+    --output json 2>/dev/null || echo '{"Items":[]}')
+
+  LOCK_COUNT=$(echo "$LOCKS" | jq '.Items | length')
+
+  if [ "$LOCK_COUNT" -eq 0 ]; then
+    log_success "No hay locks activos"
+    return 0
+  fi
+
+  log_warning "Se encontraron ${LOCK_COUNT} locks:"
+  echo ""
+  echo "$LOCKS" | jq -r '.Items[] | "  - " + .LockID.S'
+
+  echo ""
+  log_warning "⚠️  ATENCIÓN: Liberar locks puede causar inconsistencias si hay otro apply corriendo"
+  echo ""
+  log_warning "¿Deseas liberar TODOS los locks? (yes/no)"
+  read -p "Respuesta: " CONFIRM
+
+  if [ "$CONFIRM" != "yes" ]; then
+    log_info "Operación cancelada"
+    return 0
+  fi
+
+  # Liberar locks
+  echo ""
+  log_info "Liberando locks..."
+
+  echo "$LOCKS" | jq -r '.Items[].LockID.S' | while read -r lock_id; do
+    echo "  Liberando: ${lock_id}"
+
+    aws dynamodb delete-item \
+      --table-name "${DYNAMODB_TABLE}" \
+      --key "{\"LockID\": {\"S\": \"${lock_id}\"}}" \
+      --region us-east-1 2>/dev/null && echo "    ✓ Liberado" || echo "    ✗ Error"
+  done
+
+  echo ""
+  log_success "Locks liberados exitosamente"
+  echo ""
+  log_info "Ahora puedes ejecutar: ./deploy-dev.sh apply"
+}
+
 # Comando: all (pipeline completo)
 cmd_all() {
   log_step "🚀 Ejecutando pipeline completo: init → validate → plan → apply"
@@ -400,6 +460,9 @@ case $COMMAND in
     ;;
   output)
     cmd_output
+    ;;
+  unlock)
+    cmd_unlock
     ;;
   all)
     cmd_all
