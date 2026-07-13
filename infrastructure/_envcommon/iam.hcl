@@ -182,6 +182,9 @@ locals {
 dependency "eks" {
   config_path = "../eks"
 
+  # Si EKS no está aplicado, usar mocks
+  skip_outputs = true
+
   mock_outputs = {
     cluster_name                         = "fintech-eks-development"
     cluster_oidc_issuer_url              = "https://oidc.eks.us-east-1.amazonaws.com/id/EXAMPLED539D4633E53DE1B716D3041E"
