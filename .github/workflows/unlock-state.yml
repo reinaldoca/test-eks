@@ -1,0 +1,120 @@
+# GitHub Actions Workflow: Unlock Terraform State
+# Libera state locks huérfanos de DynamoDB cuando workflows se cancelan
+
+name: Unlock Terraform State
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to unlock'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - production
+      confirm:
+        description: 'Type "unlock" to confirm'
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  unlock-state:
+    name: Unlock Terraform State
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+
+    steps:
+      - name: Validate confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "unlock" ]; then
+            echo "❌ Confirmation failed. You must type 'unlock' to proceed."
+            exit 1
+          fi
+          echo "✅ Confirmation validated"
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-terragrunt
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-UnlockState
+
+      - name: List current locks
+        id: list
+        run: |
+          echo "🔍 Listing current locks in DynamoDB..."
+
+          LOCKS=$(aws dynamodb scan \
+            --table-name "fintech-platform-terraform-locks" \
+            --region us-east-1 \
+            --output json 2>/dev/null || echo '{"Items":[]}')
+
+          LOCK_COUNT=$(echo "$LOCKS" | jq '.Items | length')
+
+          echo "lock_count=$LOCK_COUNT" >> $GITHUB_OUTPUT
+
+          if [ "$LOCK_COUNT" -eq 0 ]; then
+            echo "✅ No locks found"
+            exit 0
+          fi
+
+          echo "⚠️  Found $LOCK_COUNT locks:"
+          echo "$LOCKS" | jq -r '.Items[] | "  - " + .LockID.S + " (Created: " + (.Info.S // "N/A" | fromjson | .Created) + ")"'
+
+          # Save lock IDs to file
+          echo "$LOCKS" | jq -r '.Items[].LockID.S' > /tmp/lock_ids.txt
+
+      - name: Delete locks
+        if: steps.list.outputs.lock_count > 0
+        run: |
+          echo "🔓 Deleting ${{ steps.list.outputs.lock_count }} locks..."
+
+          while read -r lock_id; do
+            echo "  Deleting: ${lock_id}"
+
+            aws dynamodb delete-item \
+              --table-name "fintech-platform-terraform-locks" \
+              --key "{\"LockID\": {\"S\": \"${lock_id}\"}}" \
+              --region us-east-1 2>/dev/null && echo "    ✓ Deleted" || echo "    ✗ Failed"
+          done < /tmp/lock_ids.txt
+
+          echo ""
+          echo "✅ All locks deleted successfully"
+
+      - name: Verify locks cleared
+        if: steps.list.outputs.lock_count > 0
+        run: |
+          echo "🔍 Verifying locks cleared..."
+
+          REMAINING=$(aws dynamodb scan \
+            --table-name "fintech-platform-terraform-locks" \
+            --region us-east-1 \
+            --query 'Items | length(@)' \
+            --output text)
+
+          if [ "$REMAINING" -eq 0 ]; then
+            echo "✅ All locks cleared successfully"
+          else
+            echo "⚠️  Warning: $REMAINING locks still remain"
+            exit 1
+          fi
+
+      - name: Summary
+        run: |
+          echo "### 🔓 State Locks Released" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ github.event.inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Locks Deleted:** ${{ steps.list.outputs.lock_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Released by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "You can now run 'Infrastructure Apply' workflow again." >> $GITHUB_STEP_SUMMARY
