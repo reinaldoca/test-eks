@@ -33,3 +33,5 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.bak
+plan-output.txt
+apply-output.txt
