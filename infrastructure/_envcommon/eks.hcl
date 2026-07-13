@@ -1,25 +1,9 @@
-# EKS Module Common Configuration
-# Módulo reutilizable para EKS Auto Mode en todos los entornos
+# EKS Auto Mode Configuration
+# Usando recursos nativos de Terraform para EKS Auto Mode
 
+# NO usar módulo - usar recursos nativos para Auto Mode
 terraform {
-  # Usar última versión estable de la serie 20.x (compatible con provider AWS v5+)
-  source = "tfr://registry.terraform.io/terraform-aws-modules/eks/aws?version=20.30.0"
-}
-
-# Override provider version solo para EKS (el módulo EKS 20.30.0 requiere AWS provider v5.x)
-generate "versions_override" {
-  path      = "versions_override.tf"
-  if_exists = "overwrite"
-  contents  = <<EOF
-terraform {
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = ">= 5.46.0, < 6.0.0"  # Force v5.x for EKS compatibility
-    }
-  }
-}
-EOF
+  source = null
 }
 
 locals {
@@ -33,62 +17,6 @@ locals {
 
   # Versión de Kubernetes
   cluster_version = "1.30"
-
-  # Node pools configuration (Karpenter-based)
-  node_pools = {
-    # Critical workloads (always-on, on-demand)
-    critical = {
-      instance_types = ["m5.large", "m5.xlarge", "m5a.large"]
-      capacity_type  = "ON_DEMAND"
-      min_size       = 3   # 1 por AZ
-      max_size       = 30
-      desired_size   = 3
-
-      taints = [{
-        key    = "critical"
-        value  = "true"
-        effect = "NO_SCHEDULE"
-      }]
-
-      labels = {
-        workload-type = "critical"
-        cost-center   = "platform"
-      }
-    }
-
-    # Standard workloads (on-demand)
-    standard = {
-      instance_types = ["m5.large", "m5.xlarge", "m6i.large", "m6i.xlarge"]
-      capacity_type  = "ON_DEMAND"
-      min_size       = 6   # 2 por AZ
-      max_size       = 50
-      desired_size   = 6
-
-      labels = {
-        workload-type = "standard"
-      }
-    }
-
-    # Batch/Data processing (spot, 40% discount)
-    batch = {
-      instance_types = ["m5.large", "m5.xlarge", "c5.large", "c5.xlarge"]
-      capacity_type  = "SPOT"
-      min_size       = 0
-      max_size       = 20
-      desired_size   = 2
-
-      taints = [{
-        key    = "spot"
-        value  = "true"
-        effect = "NO_SCHEDULE"
-      }]
-
-      labels = {
-        workload-type  = "batch"
-        cost-optimized = "true"
-      }
-    }
-  }
 }
 
 # Dependencias
@@ -99,119 +27,57 @@ dependency "vpc" {
     vpc_id          = "vpc-00000000"
     private_subnets = ["subnet-00000000", "subnet-11111111", "subnet-22222222"]
     public_subnets  = ["subnet-33333333", "subnet-44444444", "subnet-55555555"]
+    vpc_cidr_block  = "10.0.0.0/16"
   }
 }
 
-inputs = {
-  # Nombre del cluster
-  cluster_name    = local.cluster_name
-  cluster_version = local.cluster_version
+# Generar código Terraform nativo para EKS Auto Mode
+generate "eks_auto_mode" {
+  path      = "eks_auto_mode.tf"
+  if_exists = "overwrite_terragrunt"
+  contents  = <<EOF
+# EKS Cluster con Auto Mode
+resource "aws_eks_cluster" "main" {
+  name     = "${local.cluster_name}"
+  version  = "${local.cluster_version}"
+  role_arn = aws_iam_role.cluster.arn
 
-  # VPC y subredes (estas variables vienen de inputs en el child terragrunt.hcl)
-  # Los valores se pasarán al módulo Terraform como variables de entrada
-  vpc_id     = null  # Se sobreescribirá con inputs
-  subnet_ids = null  # Se sobreescribirá con inputs
+  vpc_config {
+    subnet_ids              = var.subnet_ids
+    endpoint_public_access  = true
+    endpoint_private_access = true
+    public_access_cidrs     = ["0.0.0.0/0"]
+  }
 
-  # Control plane
-  cluster_endpoint_public_access  = true
-  cluster_endpoint_private_access = true
+  # EKS Auto Mode: Gestión automática de nodos
+  compute_config {
+    enabled    = true
+    node_pools = ["general-purpose", "system"]
+  }
 
-  # Habilitar EKS Auto Mode
-  # NOTA: EKS Auto Mode es una feature preview, se habilita via console o CLI
-  # Por ahora usamos managed node groups con Karpenter
-  enable_cluster_creator_admin_permissions = true
-
-  # Cluster addons (managed by AWS)
-  cluster_addons = {
-    # VPC CNI para networking
-    vpc-cni = {
-      most_recent = true
-      configuration_values = jsonencode({
-        env = {
-          # Habilitar prefix delegation para más IPs por nodo
-          ENABLE_PREFIX_DELEGATION = "true"
-          WARM_PREFIX_TARGET       = "1"
-        }
-      })
-    }
-
-    # CoreDNS
-    coredns = {
-      most_recent = true
-    }
-
-    # kube-proxy
-    kube-proxy = {
-      most_recent = true
-    }
-
-    # EBS CSI Driver para persistent volumes
-    aws-ebs-csi-driver = {
-      most_recent = true
-      service_account_role_arn = "arn:aws:iam::${get_aws_account_id()}:role/${local.cluster_name}-ebs-csi-driver"
+  # Storage Class automático (EBS)
+  storage_config {
+    block_storage {
+      enabled = true
     }
   }
 
-  # Managed Node Groups (por cada pool)
-  eks_managed_node_groups = local.node_pools
-
-  # IAM roles for service accounts (IRSA)
-  enable_irsa = true
-
-  # Cluster security group rules
-  cluster_security_group_additional_rules = {
-    # Permitir tráfico desde VPC
-    ingress_vpc_https = {
-      description = "HTTPS from VPC"
-      protocol    = "tcp"
-      from_port   = 443
-      to_port     = 443
-      type        = "ingress"
-      cidr_blocks = ["10.0.0.0/16"]  # Se sobreescribirá con inputs si se proporciona
-    }
+  # Kubernetes Network Config
+  kubernetes_network_config {
+    service_ipv4_cidr = "172.20.0.0/16"
+    ip_family         = "ipv4"
   }
 
-  # Node security group rules
-  node_security_group_additional_rules = {
-    # Permitir comunicación entre nodos
-    ingress_self_all = {
-      description = "Node to node all traffic"
-      protocol    = "-1"
-      from_port   = 0
-      to_port     = 0
-      type        = "ingress"
-      self        = true
+  # Encryption config
+  encryption_config {
+    provider {
+      key_arn = aws_kms_key.eks.arn
     }
-
-    # Permitir tráfico desde control plane
-    ingress_cluster_all = {
-      description                   = "Cluster to node all traffic"
-      protocol                      = "-1"
-      from_port                     = 0
-      to_port                       = 0
-      type                          = "ingress"
-      source_cluster_security_group = true
-    }
-
-    # Egress a internet (via NAT Gateway)
-    egress_all = {
-      description = "Node all egress"
-      protocol    = "-1"
-      from_port   = 0
-      to_port     = 0
-      type        = "egress"
-      cidr_blocks = ["0.0.0.0/0"]
-    }
+    resources = ["secrets"]
   }
 
-  # Cluster encryption (KMS)
-  cluster_encryption_config = {
-    resources        = ["secrets"]
-    provider_key_arn = "arn:aws:kms:${local.aws_region}:${get_aws_account_id()}:key/alias/eks-${local.environment}"
-  }
-
-  # CloudWatch logging
-  cluster_enabled_log_types = [
+  # Logging
+  enabled_cluster_log_types = [
     "api",
     "audit",
     "authenticator",
@@ -219,17 +85,154 @@ inputs = {
     "scheduler"
   ]
 
-  # Retention de logs (compliance: 2 años)
-  # CloudWatch logs retention (731 es el valor válido más cercano a 730/2 años)
-  cloudwatch_log_group_retention_in_days = 731
+  # Access config - permitir acceso al creator
+  access_config {
+    authentication_mode = "API_AND_CONFIG_MAP"
+  }
 
-  # Bootstrap addons (required variable en EKS module)
-  bootstrap_self_managed_addons = false
+  depends_on = [
+    aws_iam_role_policy_attachment.cluster_AmazonEKSClusterPolicy,
+    aws_cloudwatch_log_group.cluster
+  ]
 
-  # Tags
   tags = {
-    Name        = local.cluster_name
-    Environment = local.environment
+    Name        = "${local.cluster_name}"
+    Environment = "${local.environment}"
     ManagedBy   = "terragrunt"
   }
+}
+
+# IAM Role para EKS Cluster
+resource "aws_iam_role" "cluster" {
+  name = "${local.cluster_name}-cluster-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "eks.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+
+  tags = {
+    Name = "${local.cluster_name}-cluster-role"
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "cluster_AmazonEKSClusterPolicy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+  role       = aws_iam_role.cluster.name
+}
+
+# KMS Key para encryption
+resource "aws_kms_key" "eks" {
+  description             = "KMS key for EKS secrets encryption in ${local.environment}"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+
+  tags = {
+    Name        = "eks-encryption-key-${local.environment}"
+    Environment = "${local.environment}"
+  }
+}
+
+resource "aws_kms_alias" "eks" {
+  name          = "alias/eks-${local.environment}"
+  target_key_id = aws_kms_key.eks.key_id
+}
+
+# CloudWatch Log Group
+resource "aws_cloudwatch_log_group" "cluster" {
+  name              = "/aws/eks/${local.cluster_name}/cluster"
+  retention_in_days = 731
+
+  tags = {
+    Name        = "${local.cluster_name}-logs"
+    Environment = "${local.environment}"
+  }
+}
+
+# OIDC Provider para IRSA
+data "tls_certificate" "cluster" {
+  url = aws_eks_cluster.main.identity[0].oidc[0].issuer
+}
+
+resource "aws_iam_openid_connect_provider" "cluster" {
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = [data.tls_certificate.cluster.certificates[0].sha1_fingerprint]
+  url             = aws_eks_cluster.main.identity[0].oidc[0].issuer
+
+  tags = {
+    Name = "${local.cluster_name}-oidc-provider"
+  }
+}
+
+# Cluster Security Group Rules
+resource "aws_security_group_rule" "cluster_ingress_vpc" {
+  description       = "Allow VPC to communicate with cluster API"
+  type              = "ingress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  cidr_blocks       = [var.vpc_cidr_block]
+  security_group_id = aws_eks_cluster.main.vpc_config[0].cluster_security_group_id
+}
+
+# Outputs
+output "cluster_name" {
+  description = "Name of the EKS cluster"
+  value       = aws_eks_cluster.main.name
+}
+
+output "cluster_endpoint" {
+  description = "Endpoint for EKS control plane"
+  value       = aws_eks_cluster.main.endpoint
+}
+
+output "cluster_certificate_authority_data" {
+  description = "Certificate authority data for the cluster"
+  value       = aws_eks_cluster.main.certificate_authority[0].data
+}
+
+output "cluster_oidc_issuer_url" {
+  description = "OIDC issuer URL for the cluster"
+  value       = aws_eks_cluster.main.identity[0].oidc[0].issuer
+}
+
+output "oidc_provider_arn" {
+  description = "ARN of the OIDC provider"
+  value       = aws_iam_openid_connect_provider.cluster.arn
+}
+
+output "cluster_security_group_id" {
+  description = "Security group ID attached to the EKS cluster"
+  value       = aws_eks_cluster.main.vpc_config[0].cluster_security_group_id
+}
+EOF
+}
+
+# Variables para el módulo
+generate "variables" {
+  path      = "variables.tf"
+  if_exists = "overwrite_terragrunt"
+  contents  = <<EOF
+variable "subnet_ids" {
+  description = "List of subnet IDs for the EKS cluster"
+  type        = list(string)
+}
+
+variable "vpc_cidr_block" {
+  description = "CIDR block of the VPC"
+  type        = string
+}
+EOF
+}
+
+inputs = {
+  # Estos inputs vienen del child terragrunt.hcl
+  subnet_ids     = null
+  vpc_cidr_block = null
 }
