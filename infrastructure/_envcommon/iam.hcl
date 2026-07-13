@@ -182,13 +182,16 @@ locals {
 dependency "eks" {
   config_path = "../eks"
 
-  # Si EKS no está aplicado, usar mocks
-  skip_outputs = true
+  # Permitir usar mocks en cualquier comando
+  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "apply", "destroy"]
+
+  # Si hay valores en el state, combinarlos con los mocks (shallow = los mocks ganan si el state está vacío)
+  mock_outputs_merge_strategy_with_state = "shallow"
 
   mock_outputs = {
-    cluster_name                         = "fintech-eks-development"
-    cluster_oidc_issuer_url              = "https://oidc.eks.us-east-1.amazonaws.com/id/EXAMPLED539D4633E53DE1B716D3041E"
-    oidc_provider_arn                    = "arn:aws:iam::111122223333:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLED539D4633E53DE1B716D3041E"
+    cluster_name                         = "fintech-eks-dev"
+    cluster_oidc_issuer_url              = "https://oidc.eks.us-east-1.amazonaws.com/id/MOCK123456789ABCDEF"
+    oidc_provider_arn                    = "arn:aws:iam::475274912371:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/MOCK123456789ABCDEF"
   }
 }
 
