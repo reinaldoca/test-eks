@@ -270,14 +270,24 @@ cmd_destroy() {
   fi
 
   echo ""
-  local destroy_flags=""
+  local tf_flags=""
   if [ "$AUTO_APPROVE" = true ]; then
-    destroy_flags="-- -auto-approve -no-color"
+    tf_flags="-auto-approve -no-color"
   else
-    destroy_flags="-- -no-color"
+    tf_flags="-no-color"
   fi
 
-  local cmd=$(build_terragrunt_command "destroy ${destroy_flags}")
+  # Para destroy con auto-approve, necesitamos el flag --non-interactive ANTES de run
+  local cmd=""
+  if [ -n "$TARGET_MODULE" ]; then
+    cmd="cd ${TARGET_MODULE} && terragrunt destroy -- ${tf_flags}"
+  else
+    if [ "$AUTO_APPROVE" = true ]; then
+      cmd="terragrunt --non-interactive run --all destroy -- ${tf_flags}"
+    else
+      cmd="terragrunt run --all destroy -- ${tf_flags}"
+    fi
+  fi
 
   eval $cmd | tee destroy-output.txt
 
