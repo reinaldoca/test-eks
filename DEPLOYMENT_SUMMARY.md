@@ -2,7 +2,7 @@
 
 **Fecha:** 2026-07-13  
 **Environment:** Dev  
-**Estado:** Parcialmente Desplegado (60%)
+**Estado:** Infraestructura Base Completada (80%)
 
 ---
 
@@ -86,23 +86,28 @@ OIDC: oidc.eks.us-east-1.amazonaws.com/id/328C2ADE540C85AA6987D02B9D62EA1A
 ⏳ aws_eks_addon (vpc-cni, coredns, kube-proxy, ebs-csi-driver)
 ```
 
-### 5. IAM Roles (IRSA) - **READY TO DEPLOY** ⏳
-**Estado:** Código corregido, listo para apply
+### 5. IAM Roles (IRSA) - **DEPLOYED** ✅
+**Estado:** Completamente funcional
 
 ```
-Roles a crear:
-  - fintech-eks-dev-otel-collector
-  - fintech-eks-dev-grafana
-  - fintech-eks-dev-external-secrets
-  - fintech-eks-dev-service-a
-  - fintech-eks-dev-service-b
-  - fintech-eks-dev-velero
+Roles creados (6):
+  ✅ fintech-eks-dev-otel-collector (CloudWatch, X-Ray, S3 Loki)
+  ✅ fintech-eks-dev-grafana (CloudWatch read, S3 Loki, Athena)
+  ✅ fintech-eks-dev-external-secrets (Secrets Manager, KMS)
+  ✅ fintech-eks-dev-service-a (X-Ray)
+  ✅ fintech-eks-dev-service-b (X-Ray)
+  ✅ fintech-eks-dev-velero (S3 backup, EC2 snapshots)
+
+KMS Keys (2):
+  ✅ secrets-encryption-key-dev (alias/secrets-manager-key-dev)
+  ✅ loki-encryption-key-dev (alias/loki-encryption-key-dev)
 ```
 
 **Fix aplicado:**
-- Mock outputs habilitados para apply
-- skip_outputs = true en dependency EKS
-- Puede aplicarse independientemente de EKS
+- Reemplazada dependency de EKS por data sources
+- aws_eks_cluster data source para obtener cluster info
+- aws_iam_openid_connect_provider data source desde OIDC issuer URL
+- Eliminados errores de null interpolation en generate blocks
 
 ---
 
@@ -122,24 +127,26 @@ Roles a crear:
 | 8 | CloudWatch log group exists | Import with MSYS_NO_PATHCONV | N/A |
 | 9 | KMS alias exists | Import successful | N/A |
 | 10 | EKS cluster exists | Import blocked by firewall | Pending |
-| 11 | IAM null interpolation | Mock outputs + skip_outputs | 2cbe38b, e3085ec |
+| 11 | IAM null interpolation | Data sources instead of dependency | 8c404e3 |
+| 12 | IAM template variables duplicate | Clean cache before re-apply | N/A |
 
 ---
 
 ## 📊 Estadísticas
 
 ### Progreso
-- **Módulos completados:** 3/5 (60%)
-- **Tiempo invertido:** ~4 horas
-- **Intentos de deployment:** 15+
-- **Commits realizados:** 20+
+- **Módulos completados:** 4/5 (80%)
+- **Tiempo invertido:** ~5 horas
+- **Intentos de deployment:** 20+
+- **Commits realizados:** 25+
 
 ### Recursos AWS
 - **VPC:** 1 VPC, 9 subnets, 3 NAT GW, 1 IGW
 - **S3:** 1 bucket
 - **ECR:** 2 repositories
-- **EKS:** 1 cluster (parcial)
-- **IAM:** 0 roles (pendiente)
+- **EKS:** 1 cluster (parcial - import pendiente)
+- **IAM:** 6 IRSA roles + 2 KMS keys
+- **Total recursos:** 45+ recursos activos
 
 ### Costos Estimados (Dev)
 - VPC (NAT GW): ~$32/mes
