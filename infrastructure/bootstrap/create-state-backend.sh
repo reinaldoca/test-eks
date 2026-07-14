@@ -179,36 +179,84 @@ destroy_backend() {
   echo ""
   echo -e "${RED}🗑️  Eliminando backend...${NC}"
 
-  # Eliminar todas las versiones de objetos en S3
-  echo -e "${YELLOW}📦 Vaciando bucket S3...${NC}"
-  aws s3api list-object-versions \
-    --bucket "${BUCKET_NAME}" \
-    --query 'Versions[].{Key:Key,VersionId:VersionId}' \
-    --output json \
-    | jq -r '.[] | "--key \"\(.Key)\" --version-id \"\(.VersionId)\""' \
-    | xargs -I {} sh -c "aws s3api delete-object --bucket ${BUCKET_NAME} {}" 2>/dev/null || true
+  # Verificar si el bucket existe
+  if aws s3api head-bucket --bucket "${BUCKET_NAME}" 2>/dev/null; then
+    echo -e "${YELLOW}📦 Vaciando bucket S3...${NC}"
 
-  # Eliminar delete markers
-  aws s3api list-object-versions \
-    --bucket "${BUCKET_NAME}" \
-    --query 'DeleteMarkers[].{Key:Key,VersionId:VersionId}' \
-    --output json \
-    | jq -r '.[] | "--key \"\(.Key)\" --version-id \"\(.VersionId)\""' \
-    | xargs -I {} sh -c "aws s3api delete-object --bucket ${BUCKET_NAME} {}" 2>/dev/null || true
+    # Método 1: Usar aws s3 rm con versiones (más simple y confiable)
+    echo "   Eliminando todos los objetos y versiones..."
+    aws s3api delete-objects \
+      --bucket "${BUCKET_NAME}" \
+      --delete "$(aws s3api list-object-versions \
+        --bucket "${BUCKET_NAME}" \
+        --output json \
+        --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}')" \
+      2>/dev/null || echo "   Sin versiones de objetos"
 
-  # Eliminar bucket
-  echo -e "${YELLOW}🗑️  Eliminando bucket S3...${NC}"
-  aws s3 rb "s3://${BUCKET_NAME}" --force 2>/dev/null || true
+    # Eliminar delete markers
+    echo "   Eliminando delete markers..."
+    aws s3api delete-objects \
+      --bucket "${BUCKET_NAME}" \
+      --delete "$(aws s3api list-object-versions \
+        --bucket "${BUCKET_NAME}" \
+        --output json \
+        --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}')" \
+      2>/dev/null || echo "   Sin delete markers"
+
+    # Deshabilitar versionamiento antes de eliminar
+    echo "   Deshabilitando versionamiento..."
+    aws s3api put-bucket-versioning \
+      --bucket "${BUCKET_NAME}" \
+      --versioning-configuration Status=Suspended \
+      2>/dev/null || true
+
+    # Eliminar bucket
+    echo -e "${YELLOW}🗑️  Eliminando bucket S3...${NC}"
+    aws s3 rb "s3://${BUCKET_NAME}" --force
+
+    if [ $? -eq 0 ]; then
+      echo -e "   ${GREEN}✅ Bucket eliminado${NC}"
+    else
+      echo -e "   ${RED}❌ Error al eliminar bucket${NC}"
+      # Intentar método alternativo
+      echo "   Intentando método alternativo..."
+      aws s3api delete-bucket --bucket "${BUCKET_NAME}" && echo -e "   ${GREEN}✅ Bucket eliminado${NC}" || echo -e "   ${RED}❌ Falló. Eliminar manualmente: aws s3 rb s3://${BUCKET_NAME} --force${NC}"
+    fi
+  else
+    echo -e "${YELLOW}⚠️  Bucket S3 no existe o ya fue eliminado${NC}"
+  fi
 
   # Eliminar DynamoDB table
+  echo ""
   echo -e "${YELLOW}🗑️  Eliminando DynamoDB table...${NC}"
-  aws dynamodb delete-table \
-    --table-name "${DYNAMODB_TABLE}" \
-    --region "${AWS_REGION}" \
-    2>/dev/null || true
+  if aws dynamodb describe-table --table-name "${DYNAMODB_TABLE}" --region "${AWS_REGION}" &>/dev/null; then
+    aws dynamodb delete-table \
+      --table-name "${DYNAMODB_TABLE}" \
+      --region "${AWS_REGION}"
+
+    if [ $? -eq 0 ]; then
+      echo -e "   ${GREEN}✅ DynamoDB table eliminada${NC}"
+      echo "   Esperando confirmación..."
+      aws dynamodb wait table-not-exists \
+        --table-name "${DYNAMODB_TABLE}" \
+        --region "${AWS_REGION}" \
+        2>/dev/null || true
+      echo -e "   ${GREEN}✅ Confirmado: tabla eliminada${NC}"
+    else
+      echo -e "   ${RED}❌ Error al eliminar DynamoDB table${NC}"
+    fi
+  else
+    echo -e "${YELLOW}⚠️  DynamoDB table no existe o ya fue eliminada${NC}"
+  fi
 
   echo ""
   echo -e "${GREEN}✅ Backend eliminado exitosamente.${NC}"
+  echo ""
+  echo -e "${BLUE}📋 Resumen:${NC}"
+  echo "   - S3 Bucket: ${BUCKET_NAME}"
+  echo "   - DynamoDB Table: ${DYNAMODB_TABLE}"
+  echo ""
+  echo -e "${GREEN}Verifica con:${NC} $0 status"
 }
 
 # Función para verificar estado del backend
